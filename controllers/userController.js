@@ -127,37 +127,164 @@ exports.registerUser = async (req, res) => {
 };
 
 exports.loginUser = async (req, res) => {
-  console.log("hello datas");
+  console.log("Login attempt initiated");
+  
   try {
     const { email, password } = req.body;
-    // const user = await User.findOne({ email });
 
-    // if (!user) {
-    //   return res.status(401).json({ message: "Invalid email or password." });
-    // }
-    // console.log(user.password, password, "password hitted");
-    // const isPasswordValid = await bcrypt.compare(password, user.password);
-    // if (!isPasswordValid) {
-    //   return res
-    //     .status(401)
-    //     .json({ message: "Invalid email or password hai." });
-    // }
-    // const token = jwt.sign({ userId: user._id }, "4Kq#W%L9gT!z7&$xP@jR");
-    let userRoles = "";
-
-    if (email === "meromail12@gmail.com" && password === "12345678") {
-      console.log("admin");
-      userRoles = "ADMIN";
-    } else {
-      userRoles = "USER";
+    // Input validation
+    if (!email || !password) {
+      return res.status(400).json({ 
+        message: "Email and password are required.",
+        success: false 
+      });
     }
 
-    // res.json({ token, user: user, userRoles: userRoles });
+    // Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        message: "Please provide a valid email address.",
+        success: false 
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    
+    if (!user) {
+      return res.status(401).json({ 
+        message: "Invalid email or password.",
+        success: false 
+      });
+    }
+
+    console.log("User found, verifying password");
+
+    // Check if user account is active (if you have this field)
+    if (user.status && user.status === 'inactive') {
+      return res.status(403).json({ 
+        message: "Your account is inactive. Please contact support.",
+        success: false 
+      });
+    }
+
+    // Compare password with hashed password in database
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ 
+        message: "Invalid email or password.",
+        success: false 
+      });
+    }
+
+    console.log("Password verified successfully");
+
+    // Determine user role
+    let userRoles = "USER"; // Default role
+    
+    // Check for admin credentials or role from database
+    if (user.role) {
+      // If role is stored in database
+      userRoles = user.role.toUpperCase();
+    } else {
+      // Fallback: Check for specific admin emails
+      const adminEmails = [
+        "meromail123@gmail.com",
+        "adminemail12@gmail.com"
+      ];
+      
+      if (adminEmails.includes(email.toLowerCase())) {
+        userRoles = "ADMIN";
+      }
+    }
+
+    // Generate JWT token
+    const JWT_SECRET = process.env.JWT_SECRET || "4Kq#W%L9gT!z7&$xP@jR"; // Use environment variable
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        role: userRoles 
+      },
+      JWT_SECRET,
+      { 
+        expiresIn: '24h' // Token expires in 24 hours
+      }
+    );
+
+    // Update last login timestamp (optional)
+    await User.findByIdAndUpdate(user._id, { 
+      lastLoginAt: new Date(),
+      $inc: { loginCount: 1 } // Increment login counter if you have this field
+    });
+
+    // Prepare user data (exclude sensitive information)
+    const userData = {
+      _id: user._id,
+      email: user.email,
+      name: user.name || user.firstName + ' ' + user.lastName,
+      role: userRoles,
+      createdAt: user.createdAt,
+      // Add other non-sensitive fields as needed
+    };
+
+    console.log(`User ${user.email} logged in successfully with role: ${userRoles}`);
+
+    // Send successful response
+    res.status(200).json({
+      message: "Login successful",
+      success: true,
+      user: userData,
+      userRoles: userRoles,
+      token: token,
+      expiresIn: '24h'
+    });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Login failed hai.",error: error.message });
+    console.error("Login error:", error);
+    
+    // Don't expose internal error details in production
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
+    res.status(500).json({
+      message: "Internal server error. Please try again later.",
+      success: false,
+      ...(isDevelopment && { error: error.message, stack: error.stack })
+    });
   }
 };
+
+exports.logoutUser = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(400).json({
+        message: "No token provided",
+        success: false
+      });
+    }
+
+    // Here you could add token to a blacklist if you're implementing that
+    // await BlacklistedToken.create({ token });
+
+    res.status(200).json({
+      message: "Logged out successfully",
+      success: true
+    });
+
+  } catch (error) {
+    console.error("Logout error:", error);
+    res.status(500).json({
+      message: "Logout failed",
+      success: false
+    });
+  }
+};
+
+
 
 exports.forgotPassword = async (req, res) => {
   try {
@@ -251,5 +378,37 @@ exports.resetPassword = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to reset password." });
+  }
+};
+
+
+// Helper function to verify JWT token (for middleware)
+exports.verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({
+      message: "Access denied. No token provided.",
+      success: false
+    });
+  }
+
+  try {
+    const JWT_SECRET = process.env.JWT_SECRET || "4Kq#W%L9gT!z7&$xP@jR";
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        message: "Token has expired. Please login again.",
+        success: false
+      });
+    }
+    
+    return res.status(401).json({
+      message: "Invalid token.",
+      success: false
+    });
   }
 };
