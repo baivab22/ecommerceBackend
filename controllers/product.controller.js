@@ -28,6 +28,7 @@ exports.createProduct = async (req, res, next) => {
       isBestSelling: req.body.isBestSelling,
       isWatchAndShop: req.body.isWatchAndShop,
       stockQuantity: req.body.stockQuantity,
+      isHotSelling: req.body.isHotSelling,
     });
 
     newProduct.save().then((prod) => {

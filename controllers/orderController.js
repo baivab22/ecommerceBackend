@@ -49,7 +49,10 @@ exports.getOrderedProductList = async (req, res) => {
         path: "userId",
       });
 
-    console.log(JSON.stringify(ordersList, null, 2), "values");
+    console.log(JSON.stringify(ordersList, null, 2), "values final order data");
+
+
+
 
     res
       .status(201)

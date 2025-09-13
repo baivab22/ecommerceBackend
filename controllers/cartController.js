@@ -1,4 +1,4 @@
-const Cart = require("../modals/cart.modal");
+const Cart = require("../modals/cart.modal"); 
 
 exports.createCart = async (req, res) => {
   try {
@@ -26,11 +26,6 @@ exports.createCart = async (req, res) => {
 exports.getUsersCartByUserId = async (req, res) => {
   try {
     const cart = await Cart.find({ userId: req.params.userId })
-      // .populate({
-      //   path: "products.productId",
-      // })
-      // .populate("products.productId.images");
-
       .populate({
         path: "products.productId",
         populate: {
@@ -48,34 +43,6 @@ exports.getUsersCartByUserId = async (req, res) => {
   }
 };
 
-// exports.updateCartProduct = async (req, res) => {
-//   try {
-//     const { productId, userId, quantity, price } = req.body;
-
-//     const cart = await Cart.findOne({ userId: userId });
-
-//     console.log("hello update cart hai ta");
-
-//     if (!cart) {
-//       console.log("if");
-//       return res.status(404).json({ message: "User not found" });
-//     } else {
-//       if (cart.products.find((item) => item.productId == productId)) {
-//         console.log("else if", quantity, price);
-//         item.quantity = quantity;
-//         item.price = price;
-//         const updatedQuantityAndPrice = await cart.save();
-//         res.status(201).json({
-//           data: updatedQuantityAndPrice,
-//           message: "Successfully updated product cart",
-//         });
-//       }
-//     }
-//   } catch (err) {
-//     console.log(err, "error");
-//     res.status(500).json({ error: err.message });
-//   }
-// };
 exports.updateCartProduct = async (req, res) => {
   try {
     const { productId, userId, quantity, price } = req.body;
@@ -113,20 +80,27 @@ exports.updateCartProduct = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// MODIFIED: Delete all products from cart
 exports.deleteCart = async (req, res) => {
   try {
-    const { productId } = req.body;
-    console.log(productId, "pid");
+    console.log("Deleting all products from cart for userId:", req.params.userId);
 
     const cart = await Cart.findOne({ userId: req.params.userId });
+    
     if (!cart) {
       return res.status(404).json({ message: "User not found" });
     }
-    cart.products = cart.products.filter(
-      (product) => product.productId !== productId
-    );
-    await cart.save();
-    return res.json({ data: cart, message: "successfully deleted cart" });
+    
+    // Clear all products from the cart
+    cart.products = [];
+    
+    const updatedCart = await cart.save();
+    
+    return res.json({ 
+      data: updatedCart, 
+      message: "Successfully deleted all products from cart" 
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -144,14 +118,13 @@ exports.deleteProductFromCart = async (req, res) => {
     if (!cart) {
       return res.status(404).json({ message: "User not found" });
     } else {
-      // console.clear();
-
-      console.log(cart.products, "cart products");
+      console.log(cart.products, "cart products ");
       const productIndex = cart.products.findIndex(
         (product) => product?._id.toString() === productId
       );
 
       if (productIndex !== -1) {
+        console.log(productIndex, "product index value");
         // Remove the product from the products array
         cart.products.splice(productIndex, 1);
 
@@ -165,7 +138,28 @@ exports.deleteProductFromCart = async (req, res) => {
       }
     }
   } catch (err) {
-    // await cart.save();
+    console.log("product index value error", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteCartByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log("Deleting entire cart for userId:", userId);
+
+    const deletedCart = await Cart.findOneAndDelete({ userId: userId });
+
+    if (!deletedCart) {
+      return res.status(404).json({ message: "Cart not found for this user" });
+    }
+
+    return res.json({
+      data: deletedCart,
+      message: "Successfully deleted entire cart for user",
+    });
+  } catch (err) {
+    console.log("Error deleting cart by userId:", err.message);
     return res.status(500).json({ error: err.message });
   }
 };

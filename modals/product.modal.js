@@ -59,6 +59,7 @@ const productSchema = new mongoose.Schema({
     type: Boolean,
     required: false,
   },
+   isHotSelling: { type: Boolean, required: true, default: false },
 
   originalPrice: {
     type: Number,

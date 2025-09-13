@@ -14,5 +14,5 @@ router.post("/cart/new/:userId", createCart);
 router.get("/cart/:userId", getUsersCartByUserId);
 router.patch("/cart/:productId", updateCartProduct);
 router.delete("/cart/:productId", deleteProductFromCart);
-
+router.delete("/cart/delete/:userId", deleteCart)
 module.exports = router;

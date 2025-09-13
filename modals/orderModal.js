@@ -23,6 +23,8 @@ const OrderProductSchema = new mongoose.Schema({
     type: Date,
     default: Date.now, // Automatically sets current date/time when a document is created
   },
+  shippingPrice: Number,
+  totalAmount: Number,
 });
 
 // const cartSchema = new mongoose.Schema({});
