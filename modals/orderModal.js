@@ -25,6 +25,7 @@ const OrderProductSchema = new mongoose.Schema({
   },
   shippingPrice: Number,
   totalAmount: Number,
+  phoneNumber:String
 });
 
 // const cartSchema = new mongoose.Schema({});

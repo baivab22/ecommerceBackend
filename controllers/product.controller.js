@@ -51,32 +51,42 @@ exports.getAllProduct = async (req, res, next) => {
     maxPrice,
     categoryId,
     subCategoryId,
+    nestedSubCategoryId,
     isNewArrivals,
     isBestSelling,
   } = req.query;
+  
   try {
     console.log(isBestSelling, "isBest Selling");
     let query = {};
+    
     // Search products by name if a search query is provided
     if (search) {
       query.name = { $regex: search, $options: "i" };
     }
 
     if (isBestSelling) {
-      query.isBestSelling = isBestSelling;
+      query.isBestSelling = isBestSelling === 'true';
     }
+    
     if (isNewArrivals) {
       console.log(isNewArrivals, "is New arrivals");
-      query.isNewArrivals = isNewArrivals;
+      query.isNewArrivals = isNewArrivals === 'true';
     }
 
+    // Handle category filtering
     if (categoryId !== undefined && categoryId !== "") {
       query.category = categoryId;
     }
 
-    if (subCategoryId !== undefined && subCategoryId !== "") {
+    // Handle subcategory filtering - priority to nestedSubCategoryId if provided
+    if (nestedSubCategoryId !== undefined && nestedSubCategoryId !== "") {
+      query.subCategory = nestedSubCategoryId;
+    } else if (subCategoryId !== undefined && subCategoryId !== "") {
       query.subCategory = subCategoryId;
     }
+
+    // Price filtering
     if (minPrice && maxPrice) {
       console.log(minPrice, maxPrice, "minmax");
       query.discountedPrice = {
@@ -89,7 +99,7 @@ exports.getAllProduct = async (req, res, next) => {
       query.discountedPrice = { $lte: parseInt(maxPrice) };
     }
 
-    // Sort products by price if a sort query is provided
+    // Sort products
     let sortOption = {};
     if (order === "asc" && sort === "price") {
       sortOption.originalPrice = 1;
@@ -107,11 +117,13 @@ exports.getAllProduct = async (req, res, next) => {
       .populate("images")
       .sort(sortOption);
 
-    res
-      .status(200)
-      .json({ message: "success fully get products", data: products });
-    // console.log("all items find");
+    res.status(200).json({ 
+      message: "Successfully retrieved products", 
+      data: products 
+    });
+    
   } catch (err) {
+    console.error("Error fetching products:", err);
     res.status(500).json({ error: "Error fetching products" });
   }
 };

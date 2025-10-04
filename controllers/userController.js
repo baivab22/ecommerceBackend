@@ -94,7 +94,7 @@ exports.loginUser = async (req, res) => {
         success: false 
       });
     }
-
+    console.log("Password verified successfully",password,user.password);
     // Compare password with hashed password in database
     const isPasswordValid = await bcrypt.compare(password, user.password);
     
@@ -105,7 +105,7 @@ exports.loginUser = async (req, res) => {
       });
     }
 
-    console.log("Password verified successfully");
+
 
     // Determine user role
     let userRoles = "USER"; // Default role

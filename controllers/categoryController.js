@@ -26,15 +26,59 @@ exports.createCategory = async (req, res, next) => {
 exports.updateCategory = async (req, res, next) => {
   try {
     const { name, subCategories } = req.body;
-    const image = req.file ? req.file.path : undefined; // If not updating image, keep existing
+    const { categoryId } = req.params;
+    const image = req.file ? req.file.path : undefined;
 
-    const updatePayload = { name, subCategories };
-    if (image) updatePayload.image = image;
+    // Check if category exists
+    const existingCategory = await Category.Category.findById(categoryId);
+    if (!existingCategory) {
+      return res.status(404).json({ message: "Category not found" });
+    }
+
+    // Build update payload
+    const updatePayload = {};
+    
+    // Only add name to payload if it's provided AND different from current name
+    if (name !== undefined && name !== existingCategory.name) {
+      // Check for duplicate name
+      const duplicateCategory = await Category.Category.findOne({ 
+        name: name,
+        _id: { $ne: categoryId }
+      });
+      
+      if (duplicateCategory) {
+        return res.status(400).json({ 
+          message: "Category name already exists",
+          error: {
+            duplicateKey: true,
+            existingName: name
+          }
+        });
+      }
+      updatePayload.name = name;
+    }
+    
+    // Update other fields if provided
+    if (subCategories !== undefined) {
+      updatePayload.subCategories = subCategories;
+    }
+    
+    if (image) {
+      updatePayload.image = image;
+    }
+
+    // If no fields to update, return early
+    if (Object.keys(updatePayload).length === 0) {
+      return res.status(200).json({
+        message: "No changes detected",
+        data: existingCategory,
+      });
+    }
 
     const updatedCategoryData = await Category.Category.findByIdAndUpdate(
-      req.params.categoryId,
+      categoryId,
       updatePayload,
-      { new: true }
+      { new: true, runValidators: true }
     );
 
     res.status(200).json({
@@ -42,9 +86,19 @@ exports.updateCategory = async (req, res, next) => {
       data: updatedCategoryData,
     });
   } catch (error) {
-    res.status(500).json({ message: "Error updating category", error });
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        message: "Category name already exists",
+        error: {
+          duplicateKey: true,
+          keyValue: error.keyValue
+        }
+      });
+    }
+    res.status(500).json({ message: "Error updating category", error: error.message });
   }
 };
+
 exports.getAllCategory = async (req, res, next) => {
   try {
     const data = await Category.Category.find().populate({

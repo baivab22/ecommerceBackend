@@ -53,20 +53,22 @@ exports.getAllTestimonial = async (req, res, next) => {
 };
 
 exports.deleteTestimonial = async (req, res, next) => {
-  //   console.log(req.params.productId, "req params id");
   try {
-    const deleteTestimonialData = await Testimonial.findByIdAndRemove(
+    const deleteTestimonialData = await Testimonial.findByIdAndDelete(
       req.params.testimonialId
     );
 
-    // console.log(deleteProductData, "deleteproduct data");
+    if (!deleteTestimonialData) {
+      return res.status(404).json({ message: "Testimonial not found" });
+    }
 
-    res.status(201).json({
-      message: "success fully deleted Testimonial",
+    res.status(200).json({
+      message: "Successfully deleted Testimonial",
       data: deleteTestimonialData,
     });
   } catch (error) {
-    console.log("error", error);
+    console.error("Error deleting testimonial:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
