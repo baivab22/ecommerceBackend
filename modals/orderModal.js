@@ -17,7 +17,23 @@ const OrderProductSchema = new mongoose.Schema({
   ],
   isInsideValley: Boolean,
   OrderedAt: String,
-  shippingLocation: String,
+
+  // Updated shipping location to handle coordinates and address
+
+    latitude: {
+      type: Number,
+      required: false,
+    },
+    longitude: {
+      type: Number,
+      required: false,
+    },
+    locationAddress: {
+      type: String,
+      required: false,
+    },
+  
+
   productOrderId: String,
   date: {
     type: Date,
@@ -25,9 +41,9 @@ const OrderProductSchema = new mongoose.Schema({
   },
   shippingPrice: Number,
   totalAmount: Number,
-  phoneNumber:String
+  phoneNumber: String,
+  isHomeDelivery:Boolean,
+  shippingLocation:String
 });
-
-// const cartSchema = new mongoose.Schema({});
 
 module.exports = mongoose.model("Orders", OrderProductSchema);
