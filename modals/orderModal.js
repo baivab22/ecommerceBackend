@@ -13,6 +13,7 @@ const OrderProductSchema = new mongoose.Schema({
       },
       quantity: Number,
       price: Number,
+      colorName:String
     },
   ],
   isInsideValley: Boolean,
