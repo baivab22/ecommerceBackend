@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 const dbHOST = process.env.DBHOST;
+const { startHolidayModeSchedulers } = require('./schedulers/holidayMode.scheduler');
+
+
 
 mongoose
   .connect(
@@ -8,6 +11,7 @@ mongoose
   )
   .then(() => {
     console.log("MongoDB Connnected...");
+      startHolidayModeSchedulers();
   })
   .catch((err) => {
     console.log("Error while Mongo Conn..", err);
