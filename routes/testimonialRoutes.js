@@ -1,5 +1,5 @@
+const express = require("express");
 const multer = require("multer");
-
 const {
   createTestimonial,
   getAllTestimonial,
@@ -7,17 +7,10 @@ const {
   updatedTestimonial,
   getTestimonialDetailsById,
 } = require("../controllers/testimonialController");
-const express = require("express");
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/products");
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
+const router = express.Router();
 
+// Multer storage for testimonials
 const storaget = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, "uploads/testimonial");
@@ -27,15 +20,15 @@ const storaget = multer.diskStorage({
   },
 });
 
-const videoUploadt = multer({ storage: storaget });
-const cpUploadProductVideos = videoUploadt.array("testimonialImage", 12);
+const uploadTestimonial = multer({ storage: storaget });
 
-const router = express.Router();
-router.post("/testimonial/new", cpUploadProductVideos, createTestimonial);
+// Routes
+router.post("/testimonial/new", uploadTestimonial.array("testimonialImage", 12), createTestimonial);
 router.get("/testimonial", getAllTestimonial);
 router.get("/testimonial/:testimonialId", getTestimonialDetailsById);
-
 router.delete("/testimonial/:testimonialId", deleteTestimonial);
-``;
-router.patch("/testimonial/:testimonialId", updatedTestimonial);
+
+// ✅ FIXED: use multer + correct param name
+router.patch("/testimonial/:testimonialId", uploadTestimonial.array("testimonialImage", 12), updatedTestimonial);
+
 module.exports = router;

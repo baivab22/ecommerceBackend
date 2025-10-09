@@ -1,12 +1,27 @@
 const Testimonial = require("../modals/testimonial.modal");
 
 exports.updatedTestimonial = async (req, res) => {
-  const { testimonialImage, testimonialDescription } = req.body;
-
   try {
+    const { testimonialDescription } = req.body;
+    const testimonialId = req.params.testimonialId;
+
+    console.log("Incoming body:", req.body);
+    console.log("Incoming files:", req.files);
+
+    // Extract image filenames if new images are uploaded
+    let testimonialImage = [];
+    if (req.files && req.files.length > 0) {
+      testimonialImage = req.files.map((file) => file.filename);
+    }
+
+    // Build update object dynamically
+    const updateFields = {};
+    if (testimonialDescription) updateFields.testimonialDescription = testimonialDescription;
+    if (testimonialImage.length > 0) updateFields.testimonialImage = testimonialImage;
+
     const updatedTestimonial = await Testimonial.findByIdAndUpdate(
-      req.params.id,
-      { testimonialImage, testimonialDescription },
+      testimonialId,
+      updateFields,
       { new: true }
     );
 
@@ -14,12 +29,12 @@ exports.updatedTestimonial = async (req, res) => {
       return res.status(404).json({ error: "Testimonial not found" });
     }
 
-    res.json({
+    res.status(200).json({
+      message: "Testimonial updated successfully",
       data: updatedTestimonial,
-      message: "Testimonial Updated successfully",
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error updating testimonial:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
