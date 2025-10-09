@@ -44,7 +44,8 @@ const OrderProductSchema = new mongoose.Schema({
   totalAmount: Number,
   phoneNumber: String,
   isHomeDelivery:Boolean,
-  shippingLocation:String
+  shippingLocation:String,
+  paymentMethod:String
 });
 
 module.exports = mongoose.model("Orders", OrderProductSchema);
