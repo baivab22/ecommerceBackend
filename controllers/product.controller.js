@@ -1,5 +1,4 @@
 const { Product, ProductImage } = require("../modals/product.modal");
-
 const fs = require("fs");
 const path = require("path");
 
@@ -10,6 +9,7 @@ exports.createProduct = async (req, res, next) => {
 
     const imagesfile = req.files.map((file) => file.filename);
     console.log(req.files, "coloredImage");
+    
     const newProduct = new Product({
       name: req.body.name,
       price: req.body.price,
@@ -20,6 +20,7 @@ exports.createProduct = async (req, res, next) => {
       discountedPrice: req.body.discountedPrice,
       category: req.body.category,
       subCategory: req.body.subCategory,
+      nestedSubCategory: req.body.nestedSubCategory || null,
       discountPercentage: req.body.discountPercentage,
       description: req.body.description,
       rating: req.body.rating,
@@ -27,7 +28,6 @@ exports.createProduct = async (req, res, next) => {
       isNewArrivals: req.body.isNewArrivals,
       isBestSelling: req.body.isBestSelling,
       isWatchAndShop: req.body.isWatchAndShop,
-      stockQuantity: req.body.stockQuantity,
       isHotSelling: req.body.isHotSelling,
     });
 
@@ -57,7 +57,6 @@ exports.getAllProduct = async (req, res, next) => {
   } = req.query;
   
   try {
-    console.log(isBestSelling, "isBest Selling");
     let query = {};
     
     // Search products by name if a search query is provided
@@ -65,55 +64,51 @@ exports.getAllProduct = async (req, res, next) => {
       query.name = { $regex: search, $options: "i" };
     }
 
-    if (isBestSelling) {
-      query.isBestSelling = isBestSelling === 'true';
+    if (isBestSelling === 'true') {
+      query.isBestSelling = true;
     }
     
-    if (isNewArrivals) {
-      console.log(isNewArrivals, "is New arrivals");
-      query.isNewArrivals = isNewArrivals === 'true';
+    if (isNewArrivals === 'true') {
+      query.isNewArrivals = true;
     }
 
-    // Handle category filtering
-    if (categoryId !== undefined && categoryId !== "") {
+    // Handle category filtering with hierarchical priority
+    // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
+    // Only filter by the most specific category level provided
+    if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
+      // Nested subcategory has highest priority - only filter by this
+      query.nestedSubCategory = nestedSubCategoryId;
+    } else if (subCategoryId && subCategoryId.trim() !== "") {
+      // Subcategory has medium priority - only filter by this if no nested subcategory
+      query.subCategory = subCategoryId;
+    } else if (categoryId && categoryId.trim() !== "") {
+      // Category has lowest priority - only filter by this if no subcategories provided
       query.category = categoryId;
     }
 
-    // Handle subcategory filtering - priority to nestedSubCategoryId if provided
-    if (nestedSubCategoryId !== undefined && nestedSubCategoryId !== "") {
-      query.subCategory = nestedSubCategoryId;
-    } else if (subCategoryId !== undefined && subCategoryId !== "") {
-      query.subCategory = subCategoryId;
-    }
-
     // Price filtering
-    if (minPrice && maxPrice) {
-      console.log(minPrice, maxPrice, "minmax");
-      query.discountedPrice = {
-        $gte: parseInt(minPrice),
-        $lte: parseInt(maxPrice),
-      };
-    } else if (minPrice) {
-      query.discountedPrice = { $gte: parseInt(minPrice) };
-    } else if (maxPrice) {
-      query.discountedPrice = { $lte: parseInt(maxPrice) };
+    if (minPrice || maxPrice) {
+      query.discountedPrice = {};
+      if (minPrice) {
+        query.discountedPrice.$gte = parseInt(minPrice);
+      }
+      if (maxPrice) {
+        query.discountedPrice.$lte = parseInt(maxPrice);
+      }
     }
 
     // Sort products
     let sortOption = {};
-    if (order === "asc" && sort === "price") {
-      sortOption.originalPrice = 1;
-    } else if (order === "desc" && sort === "price") {
-      sortOption.originalPrice = -1;
-    } else if (order === "asc" && sort === "name") {
-      sortOption.name = 1;
-    } else if (order === "desc" && sort === "name") {
-      sortOption.name = -1;
+    if (sort === "price") {
+      sortOption.originalPrice = order === "asc" ? 1 : -1;
+    } else if (sort === "name") {
+      sortOption.name = order === "asc" ? 1 : -1;
     }
 
     const products = await Product.find(query)
       .populate("category")
       .populate("subCategory")
+      .populate("nestedSubCategory")
       .populate("images")
       .sort(sortOption);
 
@@ -128,54 +123,29 @@ exports.getAllProduct = async (req, res, next) => {
   }
 };
 
-// exports.getAllProduct = async (req, res, next) => {
-//   const data = await Product.find()
-//     .populate("category")
-//     .populate("subCategory");
-//   res.status(200).json({ message: "success fully get products", data: data });
-//   console.log("all items find");
-// };
-
 exports.deleteProduct = async (req, res, next) => {
   console.log("delete called");
   try {
     const deleteProductData = await Product.findByIdAndDelete(
       req.params.productId
     );
-    // console.log(deleteProductData, "deleteproduct data");
-
-    // Remove all images associated with the product
-    // const imagesToDelete = deleteProductData.images.map((img) => img.filename); // Assuming `filename` holds the file name
-
-    // imagesToDelete.forEach((filename) => {
-    //   const filePath = path.join(__dirname, "../uploads/products", filename);
-    //   fs.unlink(filePath, (err) => {
-    //     if (err) {
-    //       console.error(`Error deleting file ${filename}:`, err);
-    //     }
-    //   });
-    // });
 
     res.status(200).json({
-      message: "success fully deleted Product",
+      message: "successfully deleted Product",
       data: deleteProductData,
     });
   } catch (error) {
     console.log("error", error);
+    res.status(500).json({ error: error.message });
   }
 };
 
 exports.deleteProductImages = async (req, res, next) => {
   console.log(req.params, "req.params");
-  // const { productId, imroageId } = req.params;
   const { productId, imroageId } = req.params;
 
   try {
-    // Find the product by ID
-
-    const product = await Product.findOne({ _id: productId }).populate(
-      "images"
-    );
+    const product = await Product.findOne({ _id: productId }).populate("images");
 
     console.log(product, "product");
 
@@ -183,7 +153,6 @@ exports.deleteProductImages = async (req, res, next) => {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // Find the image within the product's images array by its ID
     const imageIndex = product.images.findIndex((img) => img._id == imroageId);
 
     console.log(imageIndex, "imageIndex");
@@ -194,12 +163,10 @@ exports.deleteProductImages = async (req, res, next) => {
 
     console.log(product.images, "product images values data");
 
-    // Remove the image from the product's images array
     const deletedImage = product.images.splice(imageIndex, 1)[0];
 
-    //  Remove all images associated with the product
-
-    // Assuming `filename` holds the file name
+    console.log(product.images, "product images guys");
+    const imagesToDelete = product.images.map((img) => img.coloredImage);
 
     imagesToDelete.forEach((filename) => {
       const filePath = path.join(__dirname, "../uploads/products", filename);
@@ -210,55 +177,19 @@ exports.deleteProductImages = async (req, res, next) => {
       });
     });
 
-    console.log(product.images, "product images guys");
-    const imagesToDelete = product.images.map((img) => img.coloredImage);
-
-    // Save the modified product to update the images array in the database
     await product.save();
-
-    // Delete the image from Cloudinary using its public ID
-    // await cloudinary.uploader.destroy(deletedImage._id);
 
     res.json({ message: "Image deleted successfully" });
   } catch (error) {
-    console.error("Error deleting image from Cloudinary:", error);
+    console.error("Error deleting image:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };
 
 exports.updateProduct = async (req, res, next) => {
-  // console.log(req.params.productId, "product id");
-  // console.log(req.body, "req body");
   try {
     const urls = [];
     let videoUrl;
-
-    // await Promise.all(
-    //   req.files.image.map(async (item, index) => {
-    //     const { path } = item;
-    //     const newPath = await cloudinary.uploader.upload(
-    //       path,
-    //       { resource_type: "auto" } // Assuming you want to auto-detect resource type
-    //     );
-
-    //     urls.push({ url: newPath.secure_url });
-    //   })
-    // );
-
-    // if (req.files.video) {
-    //   const oldPath = await cloudinary.uploader.upload(
-    //     req.files.video[0].path,
-    //     // { public_id: "" },
-    //     { resource_type: "auto" },
-    //     function (error, result) {
-    //       if (result) {
-    //         videoUrl = result.secure_url;
-    //       }
-    //     }
-    //   );
-    // }
-
-    // console.log(urls, videoUrl, "image and video url");
 
     console.log("product update", req.params.productId);
 
@@ -268,42 +199,38 @@ exports.updateProduct = async (req, res, next) => {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // Append the new images to the existing ones
-    // let newImages = product.image;
-
-    // let updatedData = [...newImages, ...urls];
-
-    // Save the updated product to the database
-    // await product.save();
+    const updateData = {
+      name: req.body.name,
+      price: req.body.price,
+      images: req.body.productVariants,
+      video: req.files && req.files[0] ? req.files[0].filename : product.video,
+      originalPrice: req.body.originalPrice,
+      discountedPrice: req.body.discountedPrice,
+      category: req.body.category,
+      subCategory: req.body.subCategory,
+      nestedSubCategory: req.body.nestedSubCategory || null,
+      discountPercentage: req.body.discountPercentage,
+      description: req.body.description,
+      isNewArrivals: req.body.isNewArrivals,
+      stockQuantity: req.body.stockQuantity,
+      isBestSelling: req.body.isBestSelling,
+      isHotSelling: req.body.isHotSelling,
+      isWatchAndShop: req.body.isWatchAndShop,
+    };
 
     const updatedProductData = await Product.findByIdAndUpdate(
       { _id: req.params.productId },
-      {
-        name: req.body.name,
-        price: req.body.price,
-        images: req.body.productVariants,
-        video: req.files[0].filename,
-        originalPrice: req.body.originalPrice,
-        discountedPrice: req.body.discountedPrice,
-        category: req.body.category,
-        subCategory: req.body.subCategory,
-        discountPercentage: req.body.discountPercentage,
-        details: req.body.details,
-        isNewArrivals: req.body.isNewArrivals,
-        stockQuantity: req.body.stockQuantity,
-        isBestSelling: req.body.isBestSelling,
-      },
-      {
-        new: true,
-      }
+      updateData,
+      { new: true }
     );
 
     res.status(200).json({
-      message: "success fully udpated Product",
+      message: "successfully updated Product",
       data: updatedProductData,
     });
   } catch (error) {
     console.log("error", error);
+    res.status(500).json({ error: error.message });
   }
 };
 
@@ -313,7 +240,8 @@ exports.getProductDetailsById = async (req, res, next) => {
     const productDetails = await Product.findById(productId)
       .populate("category")
       .populate("images")
-      .populate("subCategory");
+      .populate("subCategory")
+      .populate("nestedSubCategory");
 
     if (!productDetails) {
       return res.status(404).json({ error: "Product not found" });
@@ -325,6 +253,7 @@ exports.getProductDetailsById = async (req, res, next) => {
     });
   } catch (error) {
     console.log(error, "error");
+    res.status(500).json({ error: error.message });
   }
 };
 
@@ -333,9 +262,13 @@ exports.productListByCategory = async (req, res, next) => {
     const categoryId = req.params.categoryId;
     const productListByCategory = await Product.find({
       category: categoryId,
-    });
+    })
+    .populate("category")
+    .populate("subCategory")
+    .populate("nestedSubCategory")
+    .populate("images");
 
-    if (!productListByCategory) {
+    if (!productListByCategory || productListByCategory.length === 0) {
       return res
         .status(404)
         .json({ error: "Product not found for this category" });
@@ -347,6 +280,7 @@ exports.productListByCategory = async (req, res, next) => {
     });
   } catch (error) {
     console.log(error, "error");
+    res.status(500).json({ error: error.message });
   }
 };
 
@@ -362,15 +296,11 @@ exports.CreateProductImage = async (req, res, next) => {
   }));
 
   try {
-    // const ProductImages = new ProductImage(result);
-    // Save the banner
-    // const datas = await ProductImages.save();
     const savedImages = [];
-    // const datas = await ProductImage.insertMany(result);
 
     for (const item of result) {
       const productImage = new ProductImage(item);
-      const savedImage = await productImage.save(); // Save each document one by one
+      const savedImage = await productImage.save();
       savedImages.push(savedImage);
     }
 
@@ -380,25 +310,23 @@ exports.CreateProductImage = async (req, res, next) => {
       message: "successfully created productImage",
       data: savedImages,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 };
 
 exports.deleteProductColorVariantImages = async (req, res, next) => {
-  // const { productId, imroageId } = req.params;
   const { variantId, imageId } = req.params;
 
   console.log(variantId, imageId, "variantId, imageId");
 
   try {
-    // Find the product by ID
-
     const productvariantImage = await ProductImage.findOne({ _id: variantId });
 
     if (!productvariantImage) {
       return res.status(404).json({ error: "Product color variant not found" });
     }
 
-    // Find the image within the product's images array by its ID
     const imageIndex = productvariantImage.coloredImage.findIndex(
       (img) => img == imageId
     );
@@ -409,33 +337,29 @@ exports.deleteProductColorVariantImages = async (req, res, next) => {
         .json({ error: "Image variant not found in the product" });
     }
 
-    // Remove the image from the product's images array
     const deletedImage = productvariantImage?.coloredImage.splice(
       imageIndex,
       1
     )[0];
 
-    // Save the modified product to update the images array in the database
     await productvariantImage.save();
-
-    // Delete the image from Cloudinary using its public ID
-    // await cloudinary.uploader.destroy(deletedImage._id);
 
     res.json({ message: "variant Image deleted successfully" });
   } catch (error) {
-    console.error("Error deleting image from Cloudinary:", error);
+    console.error("Error deleting image:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };
 
 exports.getAllProductVariantImages = async (req, res, next) => {
-  // const count = req.params.count;
+  try {
+    const data = await ProductImage.find();
 
-  // myArray.slice(-3);
-  const data = await ProductImage.find();
-
-  const lastdata = data.slice(-req.params.count);
-  res
-    .status(200)
-    .json({ message: "success fully get Product color Variant", data: data });
+    res.status(200).json({ 
+      message: "successfully get Product color Variant", 
+      data: data 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 };
