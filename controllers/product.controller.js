@@ -42,6 +42,87 @@ exports.createProduct = async (req, res, next) => {
   }
 };
 
+// exports.getAllProduct = async (req, res, next) => {
+//   const {
+//     search,
+//     sort,
+//     order,
+//     minPrice,
+//     maxPrice,
+//     categoryId,
+//     subCategoryId,
+//     nestedSubCategoryId,
+//     isNewArrivals,
+//     isBestSelling,
+//   } = req.query;
+  
+//   try {
+//     let query = {};
+    
+//     // Search products by name if a search query is provided
+//     if (search) {
+//       query.name = { $regex: search, $options: "i" };
+//     }
+
+//     if (isBestSelling === 'true') {
+//       query.isBestSelling = true;
+//     }
+    
+//     if (isNewArrivals === 'true') {
+//       query.isNewArrivals = true;
+//     }
+
+//     // Handle category filtering with hierarchical priority
+//     // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
+//     // Only filter by the most specific category level provided
+//     if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
+//       // Nested subcategory has highest priority - only filter by this
+//       query.nestedSubCategory = nestedSubCategoryId;
+//     } else if (subCategoryId && subCategoryId.trim() !== "") {
+//       // Subcategory has medium priority - only filter by this if no nested subcategory
+//       query.subCategory = subCategoryId;
+//     } else if (categoryId && categoryId.trim() !== "") {
+//       // Category has lowest priority - only filter by this if no subcategories provided
+//       query.category = categoryId;
+//     }
+
+//     // Price filtering
+//     if (minPrice || maxPrice) {
+//       query.discountedPrice = {};
+//       if (minPrice) {
+//         query.discountedPrice.$gte = parseInt(minPrice);
+//       }
+//       if (maxPrice) {
+//         query.discountedPrice.$lte = parseInt(maxPrice);
+//       }
+//     }
+
+//     // Sort products
+//     let sortOption = {};
+//     if (sort === "price") {
+//       sortOption.originalPrice = order === "asc" ? 1 : -1;
+//     } else if (sort === "name") {
+//       sortOption.name = order === "asc" ? 1 : -1;
+//     }
+
+//     const products = await Product.find(query)
+//       .populate("category")
+//       .populate("subCategory")
+//       .populate("nestedSubCategory")
+//       .populate("images")
+//       .sort(sortOption);
+
+//     res.status(200).json({ 
+//       message: "Successfully retrieved products", 
+//       data: products 
+//     });
+    
+//   } catch (err) {
+//     console.error("Error fetching products:", err);
+//     res.status(500).json({ error: "Error fetching products" });
+//   }
+// };
+
 exports.getAllProduct = async (req, res, next) => {
   const {
     search,
@@ -54,6 +135,8 @@ exports.getAllProduct = async (req, res, next) => {
     nestedSubCategoryId,
     isNewArrivals,
     isBestSelling,
+    page = 1,
+    limit = 10
   } = req.query;
   
   try {
@@ -73,16 +156,11 @@ exports.getAllProduct = async (req, res, next) => {
     }
 
     // Handle category filtering with hierarchical priority
-    // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
-    // Only filter by the most specific category level provided
     if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
-      // Nested subcategory has highest priority - only filter by this
       query.nestedSubCategory = nestedSubCategoryId;
     } else if (subCategoryId && subCategoryId.trim() !== "") {
-      // Subcategory has medium priority - only filter by this if no nested subcategory
       query.subCategory = subCategoryId;
     } else if (categoryId && categoryId.trim() !== "") {
-      // Category has lowest priority - only filter by this if no subcategories provided
       query.category = categoryId;
     }
 
@@ -103,18 +181,40 @@ exports.getAllProduct = async (req, res, next) => {
       sortOption.originalPrice = order === "asc" ? 1 : -1;
     } else if (sort === "name") {
       sortOption.name = order === "asc" ? 1 : -1;
+    } else {
+      sortOption.createdAt = -1; // Default: newest first
     }
 
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get total count for pagination
+    const totalProducts = await Product.countDocuments(query);
+    const totalPages = Math.ceil(totalProducts / limitNum);
+
+    // Fetch products with pagination
     const products = await Product.find(query)
       .populate("category")
       .populate("subCategory")
       .populate("nestedSubCategory")
       .populate("images")
-      .sort(sortOption);
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limitNum);
 
     res.status(200).json({ 
       message: "Successfully retrieved products", 
-      data: products 
+      data: products,
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        totalProducts: totalProducts,
+        limit: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      }
     });
     
   } catch (err) {
@@ -123,12 +223,33 @@ exports.getAllProduct = async (req, res, next) => {
   }
 };
 
+
 exports.deleteProduct = async (req, res, next) => {
   console.log("delete called");
   try {
-    const deleteProductData = await Product.findByIdAndDelete(
-      req.params.productId
-    );
+    const product = await Product.findById(req.params.productId).populate("images");
+    
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Delete all associated images from folder
+    if (product.images && product.images.length > 0) {
+      for (const image of product.images) {
+        if (image.coloredImage) {
+          const filePath = path.join(__dirname, "../uploads/products", image.coloredImage);
+          await deleteFile(filePath);
+        }
+      }
+    }
+
+    // Delete video file if exists
+    if (product.video) {
+      const videoPath = path.join(__dirname, "../uploads/products", product.video);
+      await deleteFile(videoPath);
+    }
+
+    const deleteProductData = await Product.findByIdAndDelete(req.params.productId);
 
     res.status(200).json({
       message: "successfully deleted Product",
@@ -138,6 +259,29 @@ exports.deleteProduct = async (req, res, next) => {
     console.log("error", error);
     res.status(500).json({ error: error.message });
   }
+};
+
+// Helper function to delete files
+const deleteFile = (filePath) => {
+  return new Promise((resolve, reject) => {
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+      if (err) {
+        console.log(`File doesn't exist: ${filePath}`);
+        resolve(); // File doesn't exist, resolve anyway
+        return;
+      }
+      
+      fs.unlink(filePath, (unlinkErr) => {
+        if (unlinkErr) {
+          console.error(`Error deleting file ${filePath}:`, unlinkErr);
+          reject(unlinkErr);
+        } else {
+          console.log(`Successfully deleted file: ${filePath}`);
+          resolve();
+        }
+      });
+    });
+  });
 };
 
 exports.deleteProductImages = async (req, res, next) => {
@@ -166,16 +310,12 @@ exports.deleteProductImages = async (req, res, next) => {
     const deletedImage = product.images.splice(imageIndex, 1)[0];
 
     console.log(product.images, "product images guys");
-    const imagesToDelete = product.images.map((img) => img.coloredImage);
-
-    imagesToDelete.forEach((filename) => {
-      const filePath = path.join(__dirname, "../uploads/products", filename);
-      fs.unlink(filePath, (err) => {
-        if (err) {
-          console.error(`Error deleting file ${filename}:`, err);
-        }
-      });
-    });
+    
+    // Delete the actual image file from folder
+    if (deletedImage && deletedImage.coloredImage) {
+      const filePath = path.join(__dirname, "../uploads/products", deletedImage.coloredImage);
+      await deleteFile(filePath);
+    }
 
     await product.save();
 
@@ -327,22 +467,18 @@ exports.deleteProductColorVariantImages = async (req, res, next) => {
       return res.status(404).json({ error: "Product color variant not found" });
     }
 
-    const imageIndex = productvariantImage.coloredImage.findIndex(
-      (img) => img == imageId
-    );
-
-    if (imageIndex === -1) {
-      return res
-        .status(404)
-        .json({ error: "Image variant not found in the product" });
+    // Delete the actual image file from folder before removing from database
+    if (productvariantImage.coloredImage) {
+      const filePath = path.join(__dirname, "../uploads/products", productvariantImage.coloredImage);
+      await deleteFile(filePath);
     }
 
-    const deletedImage = productvariantImage?.coloredImage.splice(
-      imageIndex,
-      1
-    )[0];
+    // Delete the entire ProductImage document
+    const deletedVariant = await ProductImage.findByIdAndDelete(variantId);
 
-    await productvariantImage.save();
+    if (!deletedVariant) {
+      return res.status(404).json({ error: "Product color variant not found" });
+    }
 
     res.json({ message: "variant Image deleted successfully" });
   } catch (error) {
@@ -360,6 +496,137 @@ exports.getAllProductVariantImages = async (req, res, next) => {
       data: data 
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+exports.getHotSellingProducts = async (req, res, next) => {
+  try {
+    const hotSellingProducts = await Product.find({ isHotSelling: true })
+      .populate("category")
+      .populate("subCategory")
+      .populate("nestedSubCategory")
+      .populate("images")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      message: "Successfully retrieved hot selling products",
+      data: hotSellingProducts,
+      count: hotSellingProducts.length
+    });
+  } catch (error) {
+    console.error("Error fetching hot selling products:", error);
+    res.status(500).json({ error: "Error fetching hot selling products" });
+  }
+};
+
+// Add product to hot selling
+exports.addToHotSelling = async (req, res, next) => {
+  try {
+    const { productId } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({ error: "Product ID is required" });
+    }
+
+    // Find the product
+    const product = await Product.findById(productId);
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Check if already hot selling
+    if (product.isHotSelling) {
+      return res.status(400).json({ 
+        error: "Product is already marked as hot selling" 
+      });
+    }
+
+    // Update product
+    product.isHotSelling = true;
+    await product.save();
+
+    res.status(200).json({
+      message: "Product successfully added to hot selling",
+      data: product
+    });
+  } catch (error) {
+    console.error("Error adding product to hot selling:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Remove product from hot selling
+exports.removeFromHotSelling = async (req, res, next) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId) {
+      return res.status(400).json({ error: "Product ID is required" });
+    }
+
+    // Find the product
+    const product = await Product.findById(productId);
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Check if it's hot selling
+    if (!product.isHotSelling) {
+      return res.status(400).json({ 
+        error: "Product is not marked as hot selling" 
+      });
+    }
+
+    // Update product
+    product.isHotSelling = false;
+    await product.save();
+
+    res.status(200).json({
+      message: "Product successfully removed from hot selling",
+      data: product
+    });
+  } catch (error) {
+    console.error("Error removing product from hot selling:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Bulk update hot selling status (optional - for advanced use)
+exports.bulkUpdateHotSelling = async (req, res, next) => {
+  try {
+    const { productIds, isHotSelling } = req.body;
+
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ 
+        error: "Product IDs array is required" 
+      });
+    }
+
+    if (typeof isHotSelling !== 'boolean') {
+      return res.status(400).json({ 
+        error: "isHotSelling must be a boolean value" 
+      });
+    }
+
+    // Update multiple products
+    const result = await Product.updateMany(
+      { _id: { $in: productIds } },
+      { $set: { isHotSelling: isHotSelling } }
+    );
+
+    res.status(200).json({
+      message: `Successfully updated ${result.modifiedCount} product(s)`,
+      data: {
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount
+      }
+    });
+  } catch (error) {
+    console.error("Error bulk updating hot selling status:", error);
     res.status(500).json({ error: error.message });
   }
 };

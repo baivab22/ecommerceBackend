@@ -1,5 +1,9 @@
 const Banner = require("../modals/banner.modal");
 
+const fs = require("fs/promises");
+const path = require("path");
+
+
 // const findOrCreateBanner = async () => {
 //   let existingBanner = await Banner.findOne();
 
@@ -53,77 +57,59 @@ exports.getAllBanner = async (req, res, next) => {
   res.status(201).json({ message: "success fully get Banner", data: data });
 };
 
-exports.deleteBannerImage = async (req, res, next) => {
+exports.deleteBannerImage = async (req, res) => {
   try {
     const { imageName } = req.params;
+
     if (!imageName) {
       return res.status(400).json({ message: "imageName parameter is required" });
     }
 
-    // Sanitize filename to avoid path traversal
     const safeName = path.basename(imageName);
 
-    // Find the banner document
+    // Find the existing banner document
     const banner = await Banner.findOne();
     if (!banner) {
       return res.status(404).json({ message: "Banner not found" });
     }
 
-    // Normalize banner images and remove the specified image
-    const images = Array.isArray(banner.bannerImage) ? banner.bannerImage : [];
-    const newImages = images.filter((img) => {
-      if (!img) return false;
-      if (typeof img === "string") return img !== safeName;
-      if (typeof img === "object") {
-        const filename = img.filename || img.name || img.url || "";
-        return filename !== safeName;
-      }
-      return true;
-    });
+    // Remove image from DB
+    const oldImages = banner.bannerImage || [];
+    const newImages = oldImages.filter((img) => img !== safeName);
 
-    const wasInDb = newImages.length !== images.length;
+    if (newImages.length === oldImages.length) {
+      return res.status(404).json({ message: "Image not found in banner record" });
+    }
+
     banner.bannerImage = newImages;
-    const saved = await banner.save();
+    await banner.save();
 
-    // Try deleting the physical file from a few likely upload directories
-    const possibleDirs = ["banners", "banner", "products", ""]; // order: common places
+    // Try deleting file from uploads folder
+    const uploadDirs = ["uploads"];
     let fileDeleted = false;
     let deletedPath = null;
 
-    for (const dir of possibleDirs) {
-      // build safe absolute path
-      const filePath = dir
-        ? path.join(__dirname, "..", "uploads", dir, safeName)
-        : path.join(__dirname, "..", "uploads", safeName);
-
+    for (const dir of uploadDirs) {
+      const filePath = path.join(__dirname, "..", dir, safeName);
       try {
-        // check existence and unlink
-        await fs.access(filePath); // throws if not exists
         await fs.unlink(filePath);
         fileDeleted = true;
         deletedPath = filePath;
         break;
       } catch (err) {
-        if (err.code === "ENOENT") {
-          // not found in this location — continue searching
-          continue;
-        } else {
-          // other errors (permissions, etc.) — log and continue
-          console.error("Error while deleting file:", filePath, err);
-          // don't break; attempt other locations
-        }
+        if (err.code === "ENOENT") continue; // File not found — try next
       }
     }
 
     return res.status(200).json({
-      message: "Banner updated",
+      message: "Banner image deleted successfully",
+      removedFromDb: true,
       fileDeleted,
       deletedPath,
-      removedFromDb: wasInDb,
-      data: saved,
+      remainingImages: banner.bannerImage,
     });
   } catch (error) {
     console.error("deleteBannerImage error:", error);
-    return res.status(500).json({ message: "An error occurred", error: error.message });
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 };

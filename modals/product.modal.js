@@ -77,7 +77,7 @@ const productSchema = new mongoose.Schema({
   // NEW: Added nestedSubCategory field
   nestedSubCategory: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "SubCategory",
+    ref: "SubCategoryNested",
     required: false,
   },
 });
