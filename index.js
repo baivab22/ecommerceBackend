@@ -1,32 +1,10 @@
 const express = require("express");
+const path = require("path");
+
 const app = express();
 require("dotenv").config();
 require("./db");
 const PORT = process.env.PORT || 8080;
-// const productRoutes = require('./routes/productRoutes');
-// const userRoutes = require('./routes/userRoutes');
-// app.use(express.json());
-
-// app.get('/ping', (req, res) => {
-//     res.send('<=PONG=>');
-// });
-// app.get('/country', (req, res) => {
-//     res.send('<=INDIA=>');
-// });
-
-// app.get('/ping', (req, res) => {
-//     res.send('PONG')
-// });
-// // /products
-// app.use('/products', productRoutes);
-// // /users
-// app.use('/users', userRoutes);
-
-// app.listen(8080, () => {
-//     console.log('Server is listenin on PORT :' + PORT);
-// })
-
-// const app = express();
 const cors = require("cors");
 const dotenv = require("dotenv");
 const bodyParser = require("body-parser");
@@ -69,9 +47,19 @@ app.get("/", (req, res) => {
   res.send("products api running new deploy");
 });
 
-app.listen(8000, () => {
-  console.log(`server initialized successfully in port no  in 8000`);
+
+
+// Serve frontend build
+app.use(express.static(path.join(__dirname, "frontend/dist")));
+
+// Any other route not handled by API will serve index.html
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "frontend/dist", "index.html"));
 });
+app.listen(PORT, () => {
+  console.log(`server initialized successfully in port no 8000`);
+});
+
 
 
 // Serve static files from uploads folder
