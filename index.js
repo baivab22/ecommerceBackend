@@ -43,9 +43,9 @@ app.use('/api',holidayModeRouter);
 
 console.log("hello main");
 
-app.get("/", (req, res) => {
-  res.send("products api running new deploy");
-});
+// app.get("/", (req, res) => {
+//   res.send("products api running new deploy");
+// });
 
 
 
