@@ -1,6 +1,7 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/abhushan/public_html/
-    - /bin/cp * $DEPLOYPATH
-   
+    - node: "npm install"
+    - node: "cd frontend && npm install && npm run build"
+    - node: "cd .."
+    - restart: true
