@@ -1,7 +1,12 @@
-const { File } = require("buffer");
 const mongoose = require("mongoose");
-const { SubCategory } = require("./category.modal");
-const { Schema, Document, Types } = require("mongoose");
+
+const productImageSchema = new mongoose.Schema({
+  colorName: String,
+  coloredImage: {
+    type: String,
+    required: true,
+  },
+});
 
 const productSchema = new mongoose.Schema({
   name: {
@@ -74,20 +79,26 @@ const productSchema = new mongoose.Schema({
     ref: "SubCategory",
   },
   
-  // NEW: Added nestedSubCategory field
   nestedSubCategory: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "SubCategoryNested",
     required: false,
   },
-});
 
-const productImageSchema = new mongoose.Schema({
-  colorName: String,
-  coloredImage: {
-    type: String,
-    required: true,
+  totalSales: {
+    type: Number,
+    default: 0
   },
+  
+  lastSoldAt: {
+    type: Date
+  },
+  
+  // Track if out-of-stock notification has been sent
+  outOfStockNotificationSent: {
+    type: Boolean,
+    default: false
+  }
 });
 
 productSchema.set("toJSON", {

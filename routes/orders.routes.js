@@ -5,13 +5,15 @@ const {
   updateOrderedProduct,
   getOrderedProductList,
   getOrderDetails,
+  sendInvoiceEmail
 } = require("../controllers/orderController");
 
 const router = express.Router();
 router.post("/order/new/:userId", createOrder);
 router.get("/order", getOrderedProductList);
-router.get("/order/orderDetails/:orderId", getOrderDetails);
-router.patch("/order/:userId", updateOrderedProduct);
+router.get("/order/orderDetails/:productOrderId", getOrderDetails);
+router.patch("/order/:orderId", updateOrderedProduct);
 router.delete("/order/:userId", deleteSpecificCartOrder);
+// router.post('/send-invoice', sendInvoiceEmail);
 
 module.exports = router;

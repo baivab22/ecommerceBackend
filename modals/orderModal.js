@@ -13,10 +13,18 @@ const OrderProductSchema = new mongoose.Schema({
       },
       quantity: Number,
       price: Number,
-      colorName:String
+      colorName:String,
+
     },
   ],
-  isInsideValley: Boolean,
+
+
+  isRedZone:Boolean,
+  includeGiftBox:Boolean,
+  deliveryTimeMessage:String,
+  deliveryPartnerPrice:Number,
+  orderedBefore12PM:Boolean,
+
   OrderedAt: String,
 
   // Updated shipping location to handle coordinates and address
@@ -33,6 +41,8 @@ const OrderProductSchema = new mongoose.Schema({
       type: String,
       required: false,
     },
+
+      isInsideValley: Boolean,
   
 
   productOrderId: String,
@@ -45,7 +55,19 @@ const OrderProductSchema = new mongoose.Schema({
   phoneNumber: String,
   isHomeDelivery:Boolean,
   shippingLocation:String,
-  paymentMethod:String
+  paymentMethod:String,
+
+    isScanned: {
+    type: Boolean,
+    default: false
+  },
+  scannedAt: {
+    type: Date
+  },
+
+        deliveryPartner: String
+ 
+  // timestamps: true
 });
 
 module.exports = mongoose.model("Orders", OrderProductSchema);

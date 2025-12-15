@@ -8,14 +8,14 @@ exports.createProduct = async (req, res, next) => {
     let videoUrl;
 
     const imagesfile = req.files.map((file) => file.filename);
-    console.log(req.files, "coloredImage");
+    console.log(req.files, "coloredImageeeeeee");
     
     const newProduct = new Product({
       name: req.body.name,
       price: req.body.price,
       stockQuantity: req.body.stockQuantity,
       images: req.body.productVariants,
-      video: req.files[0].filename,
+      video: req.files[0]?.filename,
       originalPrice: req.body.originalPrice,
       discountedPrice: req.body.discountedPrice,
       category: req.body.category,
@@ -36,6 +36,8 @@ exports.createProduct = async (req, res, next) => {
       res.json(prod);
     });
   } catch (error) {
+
+    console.log("error hai", error);
     return res.status(500).json({
       error: error.message,
     });
@@ -136,7 +138,8 @@ exports.getAllProduct = async (req, res, next) => {
     isNewArrivals,
     isBestSelling,
     page = 1,
-    limit = 10
+    limit = 10,
+    isWatchAndShop
   } = req.query;
   
   try {
@@ -153,6 +156,10 @@ exports.getAllProduct = async (req, res, next) => {
     
     if (isNewArrivals === 'true') {
       query.isNewArrivals = true;
+    }
+
+        if (isWatchAndShop === 'true') {
+      query.isWatchAndShop = true;
     }
 
     // Handle category filtering with hierarchical priority
