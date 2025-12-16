@@ -68,7 +68,7 @@ const markOrderAsScanned = async (req, res) => {
               {
                 $inc: {
                   stockQuantity: -item.quantity,
-                  totalSales: item.quantity
+                  totalSales: item.totalAmount
                 },
                 $set: {
                   lastSoldAt: new Date()
