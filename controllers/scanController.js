@@ -223,7 +223,7 @@ const getSalesAnalytics = async (req, res) => {
         $group: {
           _id: "$products.productId",
           totalQuantity: { $sum: "$products.quantity" },
-          totalRevenue: { $sum: { $multiply: ["$products.quantity", "$products.price"] } }
+          totalRevenue: { $sum:  "$products.totalAmount"  }
         }
       },
       { $sort: { totalQuantity: -1 } },
