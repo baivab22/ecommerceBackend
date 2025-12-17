@@ -185,7 +185,10 @@ const getScannedOrders = async (req, res) => {
 // Get sales analytics data
 const getSalesAnalytics = async (req, res) => {
   try {
-    const { period = 'monthly' } = req.query; // daily, weekly, monthly, yearly
+    const { period = 'monthly' , page = 1, limit = 10} = req.query;
+    
+    
+   
 
     let groupFormat;
     switch (period) {
@@ -215,32 +218,52 @@ const getSalesAnalytics = async (req, res) => {
       { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1, "_id.week": 1 } }
     ]);
 
-    // Get top selling products
-    const topProducts = await Orders.aggregate([
-      { $match: { isScanned: true } },
-      { $unwind: "$products" },
-      {
-        $group: {
-          _id: "$products.productId",
-          totalQuantity: { $sum: "$products.quantity" },
-          totalRevenue: { $sum:  "$products.totalAmount"  }
-        }
-      },
-      { $sort: { totalQuantity: -1 } },
-      { $limit: 10 },
-      {
-        $lookup: {
-          from: "products",
-          localField: "_id",
-          foreignField: "_id",
-          as: "productDetails"
-        }
-      }
-    ]);
 
+
+
+
+
+    // Get top selling products
+    // const topProducts = await Orders.aggregate([
+    //   { $match: { isScanned: true } },
+    //   { $unwind: "$products" },
+    //   {
+    //     $group: {
+    //       _id: "$products.productId",
+    //       totalQuantity: { $sum: "$products.quantity" },
+    //       totalRevenue: { $sum:  "$products.totalAmount"  }
+    //     }
+    //   },
+    //   { $sort: { totalQuantity: -1 } },
+    //   { $limit: 10 },
+    //   {
+    //     $lookup: {
+    //       from: "products",
+    //       localField: "_id",
+    //       foreignField: "_id",
+    //       as: "productDetails"
+    //     }
+    //   }
+    // ]);
+
+
+    const topProducts =  await Orders.find({ isScanned: true })
+      .populate('products.productId')
+      .populate('userId')
+      .sort({ scannedAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+    const scannedOrders = await Orders.find({ isScanned: true })
+      .populate('products.productId')
+      .populate('userId')
+      .sort({ scannedAt: -1 })
+      // .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+      
     res.status(200).json({
       success: true,
-      salesData: salesData,
+      salesData:scannedOrders,
       topProducts: topProducts,
       period: period
     });
