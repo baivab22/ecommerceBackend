@@ -38,8 +38,8 @@ const userSchema = new mongoose.Schema({
   facebookId: {
     type: String,
     default: null,
-    unique: true,
-    sparse: true
+    sparse: true // This allows multiple documents with null values for facebookId
+    // Removed unique: true to allow duplicates or null values
   },
   // TikTok OAuth fields
   isTikTokUser: {
