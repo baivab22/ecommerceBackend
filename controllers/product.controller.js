@@ -44,11 +44,9 @@ exports.createProduct = async (req, res, next) => {
   }
 };
 
-exports.getAllProduct = async (req, res, next) => {
+exports.getAllProduct = async (req, res) => {
   const {
     search,
-    sort,
-    order,
     minPrice,
     maxPrice,
     categoryId,
@@ -60,97 +58,78 @@ exports.getAllProduct = async (req, res, next) => {
     page = 1,
     limit = 12,
   } = req.query;
-  
+
   try {
-    let query = {};
-    
-    // Search products by name if a search query is provided
+    const query = {};
+
+    // Search by product name
     if (search) {
       query.name = { $regex: search, $options: "i" };
     }
 
-    if (isBestSelling === 'true') {
+    // Flags filtering
+    if (isBestSelling === "true") {
       query.isBestSelling = true;
     }
-    
-    if (isNewArrivals === 'true') {
+
+    if (isNewArrivals === "true") {
       query.isNewArrivals = true;
     }
 
-    if (isWatchAndShop === 'true') {
+    if (isWatchAndShop === "true") {
       query.isWatchAndShop = true;
     }
 
-    // Handle category filtering with hierarchical priority
-    // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
-    // Only filter by the most specific category level provided
-    if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
-      // Nested subcategory has highest priority - only filter by this
+    // Category priority filtering
+    if (nestedSubCategoryId?.trim()) {
       query.nestedSubCategory = nestedSubCategoryId;
-    } else if (subCategoryId && subCategoryId.trim() !== "") {
-      // Subcategory has medium priority - only filter by this if no nested subcategory
+    } else if (subCategoryId?.trim()) {
       query.subCategory = subCategoryId;
-    } else if (categoryId && categoryId.trim() !== "") {
-      // Category has lowest priority - only filter by this if no subcategories provided
+    } else if (categoryId?.trim()) {
       query.category = categoryId;
     }
 
     // Price filtering
     if (minPrice || maxPrice) {
       query.discountedPrice = {};
-      if (minPrice) {
-        query.discountedPrice.$gte = parseInt(minPrice);
-      }
-      if (maxPrice) {
-        query.discountedPrice.$lte = parseInt(maxPrice);
-      }
-    }
-
-    // Sort products
-    let sortOption = {};
-    if (sort === "price") {
-      sortOption.originalPrice = order === "asc" ? 1 : -1;
-    } else if (sort === "name") {
-      sortOption.name = order === "asc" ? 1 : -1;
-    } else {
-      // Default sort: latest created items first (newest to oldest)
-      sortOption.createdAt = -1;
+      if (minPrice) query.discountedPrice.$gte = Number(minPrice);
+      if (maxPrice) query.discountedPrice.$lte = Number(maxPrice);
     }
 
     // Pagination
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
+    const pageNum = Number(page);
+    const limitNum = Number(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Get total count for pagination info
     const totalProducts = await Product.countDocuments(query);
 
-    // Fetch products with pagination
     const products = await Product.find(query)
       .populate("category")
       .populate("subCategory")
       .populate("nestedSubCategory")
       .populate("images")
-      .sort()
+      .sort({ createdAt: -1 })   // ✅ ALWAYS NEWEST FIRST
       .skip(skip)
       .limit(limitNum);
 
-    res.status(200).json({ 
-      message: "Successfully retrieved products", 
+    res.status(200).json({
+      message: "Products fetched successfully",
       data: products,
       pagination: {
         currentPage: pageNum,
         totalPages: Math.ceil(totalProducts / limitNum),
-        totalProducts: totalProducts,
-        limit: limitNum
-      }
+        totalProducts,
+        limit: limitNum,
+      },
     });
-    
-  } catch (err) {
-    console.error("Error fetching products:", err);
-    res.status(500).json({ error: "Error fetching products" });
+  } catch (error) {
+    console.error("Error fetching products:", error);
+    res.status(500).json({
+      message: "Failed to fetch products",
+    });
   }
 };
+
 
 // exports.getAllProduct = async (req, res, next) => {
 //   const {
