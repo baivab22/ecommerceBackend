@@ -44,6 +44,11 @@ exports.createProduct = async (req, res, next) => {
   }
 };
 
+
+
+/* =====================================
+   GET ALL PRODUCTS (LATEST FIRST)
+===================================== */
 exports.getAllProduct = async (req, res) => {
   const {
     search,
@@ -62,25 +67,17 @@ exports.getAllProduct = async (req, res) => {
   try {
     const query = {};
 
-    // Search by product name
-    if (search) {
-      query.name = { $regex: search, $options: "i" };
+    /* ---------- Search ---------- */
+    if (search && search.trim()) {
+      query.name = { $regex: search.trim(), $options: "i" };
     }
 
-    // Flags filtering
-    if (isBestSelling === "true") {
-      query.isBestSelling = true;
-    }
+    /* ---------- Flag Filters ---------- */
+    if (isBestSelling === "true") query.isBestSelling = true;
+    if (isNewArrivals === "true") query.isNewArrivals = true;
+    if (isWatchAndShop === "true") query.isWatchAndShop = true;
 
-    if (isNewArrivals === "true") {
-      query.isNewArrivals = true;
-    }
-
-    if (isWatchAndShop === "true") {
-      query.isWatchAndShop = true;
-    }
-
-    // Category priority filtering
+    /* ---------- Category Priority ---------- */
     if (nestedSubCategoryId?.trim()) {
       query.nestedSubCategory = nestedSubCategoryId;
     } else if (subCategoryId?.trim()) {
@@ -89,28 +86,32 @@ exports.getAllProduct = async (req, res) => {
       query.category = categoryId;
     }
 
-    // Price filtering
+    /* ---------- Price Filter ---------- */
     if (minPrice || maxPrice) {
       query.discountedPrice = {};
       if (minPrice) query.discountedPrice.$gte = Number(minPrice);
       if (maxPrice) query.discountedPrice.$lte = Number(maxPrice);
     }
 
-    // Pagination
-    const pageNum = Number(page);
-    const limitNum = Number(limit);
+    /* ---------- Pagination ---------- */
+    const pageNum = Math.max(Number(page), 1);
+    const limitNum = Math.max(Number(limit), 1);
     const skip = (pageNum - 1) * limitNum;
 
+    /* ---------- Count ---------- */
     const totalProducts = await Product.countDocuments(query);
 
+    /* ---------- Fetch Products ---------- */
     const products = await Product.find(query)
       .populate("category")
       .populate("subCategory")
       .populate("nestedSubCategory")
       .populate("images")
-      .sort({ createdAt: -1 })   // ✅ ALWAYS NEWEST FIRST
+      // ✅ ALWAYS LATEST UPLOADED FIRST
+      .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limitNum);
+      .limit(limitNum)
+      .lean();
 
     res.status(200).json({
       message: "Products fetched successfully",
@@ -126,9 +127,11 @@ exports.getAllProduct = async (req, res) => {
     console.error("Error fetching products:", error);
     res.status(500).json({
       message: "Failed to fetch products",
+      error: error.message,
     });
   }
 };
+
 
 
 // exports.getAllProduct = async (req, res, next) => {
