@@ -57,6 +57,9 @@ const OrderProductSchema = new mongoose.Schema({
   shippingLocation:String,
   paymentMethod:String,
 
+
+  orderNote:String,
+
     isScanned: {
     type: Boolean,
     default: false
