@@ -100,6 +100,10 @@ exports.getOrderedProductList = async (req, res) => {
       .populate({
         path: "products.productId",
         model: "Product",
+        populate: {
+          path: "images",
+          model: "ProductImage",
+        },
       })
       .populate({
         path: "userId",
