@@ -69,6 +69,14 @@ giftBoxCharge:Number,
     type: Date
   },
 
+    isConfirmed: {
+      type: Boolean,
+      default: false,
+    },
+    confirmedAt: {
+      type: Date,
+    },
+
         deliveryPartner: String
  
   // timestamps: true

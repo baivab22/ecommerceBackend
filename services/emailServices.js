@@ -1,7 +1,6 @@
 const { EMAIL_CONFIG, transporter } = require('./mailConfig');
 const { Product } = require("../modals/product.modal");
 const {
-  buildInvoiceHtml,
   generateInvoicePngBuffer,
   generateInvoiceSvgBuffer,
 } = require('./invoiceRenderer.service');
@@ -306,14 +305,37 @@ const sendOrderConfirmationToCustomer = async (order) => {
     const customerName = order?.userId?.name || 'Valued Customer';
     const orderId = order?.productOrderId || order?._id || 'N/A';
 
-    const confirmationSubject = `Order Confirmation #${orderId}`;
-    const confirmationHtml = buildInvoiceHtml({
-      order,
-      customerEmail,
-      customerName,
-      senderEmail: EMAIL_CONFIG.sender,
-      title: 'Order Confirmation',
-    });
+    const confirmationSubject = `Order Confirmed #${orderId}`;
+    const totalAmount = Number(order?.totalAmount || 0);
+    const shippingLocation = order?.shippingLocation || order?.locationAddress || 'N/A';
+    const paymentMethod = order?.paymentMethod || 'N/A';
+    const deliveryPartner = order?.deliveryPartner || 'Not assigned yet';
+    const deliveryType = order?.isHomeDelivery ? 'Home Delivery' : 'Office Delivery';
+
+    const confirmationHtml = `
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 680px; margin: 0 auto; color: #111827;">
+        <h2 style="margin: 0 0 12px; color: #111827;">Your Order Is Confirmed</h2>
+        <p style="margin: 0 0 10px; line-height: 1.6;">Dear ${customerName},</p>
+        <p style="margin: 0 0 10px; line-height: 1.6;">
+          Great news. Your order has been confirmed by our team and is now being prepared.
+        </p>
+        <div style="background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin: 14px 0;">
+          <p style="margin: 4px 0;"><strong>Order ID:</strong> ${orderId}</p>
+          <p style="margin: 4px 0;"><strong>Total Amount:</strong> NPR ${totalAmount.toFixed(2)}</p>
+          <p style="margin: 4px 0;"><strong>Payment Method:</strong> ${paymentMethod}</p>
+          <p style="margin: 4px 0;"><strong>Delivery Type:</strong> ${deliveryType}</p>
+          <p style="margin: 4px 0;"><strong>Delivery Partner:</strong> ${deliveryPartner}</p>
+          <p style="margin: 4px 0;"><strong>Delivery Address:</strong> ${shippingLocation}</p>
+        </div>
+        <p style="margin: 0 0 10px; line-height: 1.6;">
+          We have attached your order confirmation image/invoice to this email for your records.
+        </p>
+        <p style="margin: 0 0 10px; line-height: 1.6;">
+          If you need any help, please contact us at ${EMAIL_CONFIG.sender}.
+        </p>
+        <p style="margin: 18px 0 0;">Thank you for shopping with Aabhushan Gallery.</p>
+      </div>
+    `;
 
     const invoicePng = await generateInvoicePngBuffer({
       order,

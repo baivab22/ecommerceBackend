@@ -96,13 +96,6 @@ exports.createOrder = async (req, res) => {
       if (!sent) {
         console.error("Admin new-order email was not sent for order", createOrderedData?._id);
       }
-
-      const customerConfirmationSent = await sendOrderConfirmationToCustomer(
-        enrichedOrderForEmail || createOrderedData
-      );
-      if (!customerConfirmationSent) {
-        console.error('Customer order confirmation email was not sent for order', createOrderedData?._id);
-      }
     } catch (adminEmailError) {
       console.error('Failed to send order notification emails:', adminEmailError);
     }
@@ -251,11 +244,48 @@ exports.updateOrderedProduct = async (req, res) => {
 
   console.log( req.params.orderId, req.body, "update order data");
   try {
+    const existingOrder = await Orders.findById(req.params.orderId);
+    if (!existingOrder) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    const isConfirmingNow =
+      req.body?.isConfirmed === true && existingOrder.isConfirmed !== true;
+
+    const patchData = {
+      ...req.body,
+    };
+
+    if (isConfirmingNow && !patchData.confirmedAt) {
+      patchData.confirmedAt = new Date();
+    }
+
     const updatedOrder = await Orders.findByIdAndUpdate(
       req.params.orderId,
-      req.body,
+      patchData,
       { new: true }
-    );
+    )
+      .populate('userId')
+      .populate({
+        path: 'products.productId',
+        model: 'Product',
+        populate: {
+          path: 'images',
+          model: 'ProductImage',
+        },
+      });
+
+    if (isConfirmingNow && updatedOrder) {
+      try {
+        const customerConfirmationSent = await sendOrderConfirmationToCustomer(updatedOrder);
+        if (!customerConfirmationSent) {
+          console.error('Customer order confirmation email was not sent for order', updatedOrder?._id);
+        }
+      } catch (emailError) {
+        console.error('Failed to send customer confirmation on admin confirm:', emailError);
+      }
+    }
+
     res
       .status(201)
       .json({ data: updatedOrder, message: "successfully updated Orders" });
