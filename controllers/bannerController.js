@@ -1,60 +1,55 @@
 const Banner = require("../modals/banner.modal");
-
 const fs = require("fs/promises");
 const path = require("path");
 
-
-// const findOrCreateBanner = async () => {
-//   let existingBanner = await Banner.findOne();
-
-//   if (!existingBanner) {
-//     // If no banner exists, create a new one
-//     existingBanner = await new Banner();
-//     await existingBanner.save();
-//   }
-
-//   return existingBanner;
-// };
-
 exports.createBanner = async (req, res, next) => {
   try {
-    console.log("hitted banner", req.files);
+    console.log("Banner upload - files received:", req.files?.length || 0);
 
     let banner = await Banner.findOne();
 
     if (!banner) {
-      // If no banner exists, create a new one
       banner = new Banner();
     }
 
     // Get image filenames from the uploaded files
     const fileNames = req.files.map((file) => file.filename);
+    console.log("Filenames:", fileNames);
 
-    console.log(fileNames, "fileNames hai ta");
-
-    // Add image filenames to the banner's bannerImages array
+    // Add image filenames to the banner's bannerImage array
     banner.bannerImage = [...(banner.bannerImage || []), ...fileNames];
 
     // Save the banner
-    const datas = await banner.save();
-
-    console.log(datas, "from banner");
-
-    // const fileNames = req.files.map((file) => file.filename);
-
-    // const bannerImage = new Banner({ bannerImage: fileNames });
-    // const datas = await bannerImage.save();
+    const savedBanner = await banner.save();
+    console.log("Banner saved:", savedBanner);
 
     res.status(201).json({
-      message: "success fully creaete banner",
-      data: datas,
+      message: "successfully created banner",
+      data: savedBanner,
     });
-  } catch (error) {}
+  } catch (error) {
+    console.error("Error creating banner:", error);
+    res.status(500).json({
+      message: "Failed to create banner",
+      error: error.message,
+    });
+  }
 };
 
 exports.getAllBanner = async (req, res, next) => {
-  const data = await Banner.find();
-  res.status(201).json({ message: "success fully get Banner", data: data });
+  try {
+    const data = await Banner.find();
+    res.status(200).json({
+      message: "successfully retrieved banners",
+      data: data,
+    });
+  } catch (error) {
+    console.error("Error fetching banners:", error);
+    res.status(500).json({
+      message: "Failed to fetch banners",
+      error: error.message,
+    });
+  }
 };
 
 exports.deleteBannerImage = async (req, res) => {
@@ -82,34 +77,28 @@ exports.deleteBannerImage = async (req, res) => {
     }
 
     banner.bannerImage = newImages;
-    await banner.save();
+    const updatedBanner = await banner.save();
 
-    // Try deleting file from uploads folder
-    const uploadDirs = ["uploads"];
-    let fileDeleted = false;
-    let deletedPath = null;
-
-    for (const dir of uploadDirs) {
-      const filePath = path.join(__dirname, "..", dir, safeName);
-      try {
-        await fs.unlink(filePath);
-        fileDeleted = true;
-        deletedPath = filePath;
-        break;
-      } catch (err) {
-        if (err.code === "ENOENT") continue; // File not found — try next
+    // Delete file from uploads/banners folder
+    const filePath = path.join(__dirname, "..", "uploads/banners", safeName);
+    try {
+      await fs.unlink(filePath);
+      console.log("File deleted:", filePath);
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        console.error("Error deleting file:", err);
       }
     }
 
     return res.status(200).json({
       message: "Banner image deleted successfully",
-      removedFromDb: true,
-      fileDeleted,
-      deletedPath,
-      remainingImages: banner.bannerImage,
+      data: updatedBanner,
     });
   } catch (error) {
     console.error("deleteBannerImage error:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      message: "Failed to delete banner image",
+      error: error.message,
+    });
   }
 };

@@ -1,9 +1,8 @@
 const express = require("express");
+const { productUpload, videoUpload } = require("../handlers/multerProduct.handler");
 
 const router = express.Router();
-// const upload = require("../handlers/multer.handler");
 
-const multer = require("multer");
 const {
   getAllProduct,
   createProduct,
@@ -16,33 +15,10 @@ const {
   deleteProductColorVariantImages,
   getAllProductVariantImages,
 } = require("../controllers/product.controller");
-
 const productController = require("../controllers/product.controller");
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/products");
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
-
-const storageVideo = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/video");
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
-
-const videoUpload = multer({ storage: storageVideo });
 const cpUploadProductVideo = videoUpload.array("video", 12);
-console.log(cpUploadProductVideo, "cpupload");
-const upload = multer({ storage: storage });
-
-const cpUploadProduct = upload.array("coloredImage", 12);
+const cpUploadProduct = productUpload.array("coloredImage", 12);
 
 router.route("/product").get(getAllProduct);
 router.route("/product/new").post(cpUploadProductVideo, createProduct);
