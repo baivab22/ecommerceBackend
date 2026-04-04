@@ -44,6 +44,10 @@ app.get("/video/:file", (req, res) => {
   res.redirect(301, `/uploads/video/${req.params.file}`);
 });
 
+app.get("/banners/:file", (req, res) => {
+  res.redirect(301, `/uploads/banners/${req.params.file}`);
+});
+
 // // Serve uploaded files
 // app.use("/uploads", express.static("uploads"));
 
