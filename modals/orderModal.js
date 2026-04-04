@@ -18,12 +18,13 @@ const OrderProductSchema = new mongoose.Schema({
     },
   ],
 
-
+giftBoxCharge:Number,
   isRedZone:Boolean,
   includeGiftBox:Boolean,
   deliveryTimeMessage:String,
   deliveryPartnerPrice:Number,
   orderedBefore12PM:Boolean,
+  
 
   OrderedAt: String,
 

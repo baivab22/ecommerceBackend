@@ -1,7 +1,12 @@
 const mongoose = require('mongoose');
 const Orders = require("../modals/orderModal");
 const { Product } = require("../modals/product.modal");
-const { sendOutOfStockNotification, sendCompleteOutOfStockReport } = require("../services/emailServices");
+const {
+  sendOutOfStockNotification,
+  sendCompleteOutOfStockReport,
+  sendNewOrderPlacedNotification,
+  sendOrderConfirmationToCustomer,
+} = require("../services/emailServices");
 
 exports.createOrder = async (req, res) => {
   
@@ -81,6 +86,27 @@ exports.createOrder = async (req, res) => {
       }
     }
 
+    // Notify admin about every new order placement (non-blocking for order success).
+    try {
+      const enrichedOrderForEmail = await Orders.findById(createOrderedData._id)
+        .populate('userId')
+        .populate('products.productId');
+
+      const sent = await sendNewOrderPlacedNotification(enrichedOrderForEmail || createOrderedData);
+      if (!sent) {
+        console.error("Admin new-order email was not sent for order", createOrderedData?._id);
+      }
+
+      const customerConfirmationSent = await sendOrderConfirmationToCustomer(
+        enrichedOrderForEmail || createOrderedData
+      );
+      if (!customerConfirmationSent) {
+        console.error('Customer order confirmation email was not sent for order', createOrderedData?._id);
+      }
+    } catch (adminEmailError) {
+      console.error('Failed to send order notification emails:', adminEmailError);
+    }
+
     res.status(201).json({
       data: createOrderedData,
       success: "Successfully Created Orders",
@@ -96,7 +122,79 @@ exports.createOrder = async (req, res) => {
 
 exports.getOrderedProductList = async (req, res) => {
   try {
-    const ordersList = await Orders.find()
+    // Pagination
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    // Search
+    const search = req.query.search ? req.query.search.trim() : '';
+
+    // Date filtering
+    const dateFilterType = req.query.dateFilter || 'all';
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+
+    let dateQuery = {};
+    const now = new Date();
+    if (dateFilterType !== 'all') {
+      let start, end;
+      if (dateFilterType === 'last1hour') {
+        start = new Date(now.getTime() - 60 * 60 * 1000);
+        end = now;
+      } else if (dateFilterType === 'last2hour') {
+        start = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+        end = now;
+      } else if (dateFilterType === 'last1day') {
+        start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        end = now;
+      } else if (dateFilterType === 'last7days') {
+        start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        end = now;
+      } else if (dateFilterType === 'custom' && startDate && endDate) {
+        start = new Date(startDate);
+        end = new Date(endDate);
+        // Add 1 day to endDate to make it inclusive
+        end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+      }
+      if (start && end) {
+        dateQuery.date = { $gte: start, $lt: end };
+      }
+    }
+
+    // Build search query
+    let searchQuery = {};
+    if (search) {
+      const regex = new RegExp(search, 'i');
+      searchQuery = {
+        $or: [
+          { productOrderId: regex },
+          { shippingLocation: regex },
+          { locationAddress: regex },
+          { paymentMethod: regex },
+          { deliveryPartner: regex },
+          { phoneNumber: regex },
+        ]
+      };
+    }
+
+    // Compose final query
+    const query = {
+      ...dateQuery,
+      ...searchQuery,
+    };
+
+    // For searching inside user or products, need aggregation or populate+filter
+    // For simplicity, fetch matching orders, then filter in-memory for user/product search
+
+    // Get total count for pagination
+    const totalCount = await Orders.countDocuments(query);
+
+    // Fetch paginated orders
+    let ordersList = await Orders.find(query)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(limit)
       .populate({
         path: "products.productId",
         model: "Product",
@@ -109,11 +207,40 @@ exports.getOrderedProductList = async (req, res) => {
         path: "userId",
       });
 
-    console.log(JSON.stringify(ordersList, null, 2), "values final order data");
+    // If search includes user or product name, filter in-memory, then re-apply pagination
+    let filteredOrders = ordersList;
+    let filteredCount = totalCount;
+    if (search) {
+      const regex = new RegExp(search, 'i');
+      filteredOrders = ordersList.filter(order => {
+        // User fields
+        if (order.userId) {
+          if (order.userId.email && regex.test(order.userId.email)) return true;
+          if (order.userId.name && regex.test(order.userId.name)) return true;
+          if (order.userId.phone && regex.test(order.userId.phone)) return true;
+        }
+        // Product fields
+        if (order.products && order.products.some(p => p.productId && p.productId.name && regex.test(p.productId.name))) return true;
+        return (
+          (order.productOrderId && regex.test(order.productOrderId)) ||
+          (order.shippingLocation && regex.test(order.shippingLocation)) ||
+          (order.locationAddress && regex.test(order.locationAddress)) ||
+          (order.paymentMethod && regex.test(order.paymentMethod)) ||
+          (order.deliveryPartner && regex.test(order.deliveryPartner)) ||
+          (order.phoneNumber && regex.test(order.phoneNumber))
+        );
+      });
+      filteredCount = filteredOrders.length;
+      filteredOrders = filteredOrders.slice(0, limit); // Always return only the first page of filtered results
+    }
 
-    res
-      .status(201)
-      .json({ data: ordersList, success: "successfully Got Orders" });
+    res.status(200).json({
+      orders: search ? filteredOrders : ordersList,
+      totalCount: search ? filteredCount : totalCount,
+      page,
+      limit,
+      success: "successfully Got Orders"
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -139,8 +266,21 @@ exports.updateOrderedProduct = async (req, res) => {
 
 exports.deleteSpecificCartOrder = async (req, res) => {
   try {
-    const deletedOrder = await Orders.findByIdAndRemove(req.params.id);
-    res.json(deletedOrder);
+    const orderId = req.params.orderId || req.params.id || req.params.userId;
+    const deletedOrder = await Orders.findByIdAndDelete(orderId);
+
+    if (!deletedOrder) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Order deleted successfully",
+      order: deletedOrder
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

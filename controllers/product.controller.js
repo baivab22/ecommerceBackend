@@ -153,20 +153,24 @@ exports.getAllProduct = async (req, res, next) => {
   
   try {
     let query = {};
-    
-    // Search products by name if a search query is provided
-    if (search) {
-      query.name = { $regex: search, $options: "i" };
+    // Advanced search: trim, collapse whitespace, match name/description, fuzzy/partial
+    if (search && typeof search === 'string' && search.trim()) {
+      // Clean up search string
+      const cleaned = search.trim().replace(/\s+/g, ' ');
+      // Fuzzy regex: allow partial matches, ignore case, match anywhere in name or description
+      const regex = new RegExp(cleaned.split(' ').join('.*'), 'i');
+      query.$or = [
+        { name: { $regex: regex } },
+        { description: { $regex: regex } }
+      ];
     }
 
     if (isBestSelling === 'true') {
       query.isBestSelling = true;
     }
-    
     if (isNewArrivals === 'true') {
       query.isNewArrivals = true;
     }
-
     if (isWatchAndShop === 'true') {
       query.isWatchAndShop = true;
     }
@@ -221,7 +225,7 @@ exports.getAllProduct = async (req, res, next) => {
       .populate("subCategory")
       .populate("nestedSubCategory")
       .populate("images")
-      .sort({createdAt: -1})
+      .sort(sortOption)
       .skip(skip)
       //  .lean()
       .limit(limitNum);

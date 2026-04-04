@@ -32,7 +32,17 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-app.use(express.static("uploads"));
+const uploadsDir = path.join(__dirname, "uploads");
+app.use("/uploads", express.static(uploadsDir));
+
+// Backward compatibility: keep old root-level asset links working.
+app.get("/products/:file", (req, res) => {
+  res.redirect(301, `/uploads/products/${req.params.file}`);
+});
+
+app.get("/video/:file", (req, res) => {
+  res.redirect(301, `/uploads/video/${req.params.file}`);
+});
 
 // // Serve uploaded files
 // app.use("/uploads", express.static("uploads"));

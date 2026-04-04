@@ -1,4 +1,3 @@
-const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 const User = require("../modals/userModal");
 const express = require("express");
@@ -8,17 +7,19 @@ const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require('google-auth-library');
 const Orders = require("../modals/orderModal");
 const axios = require('axios'); // Add this for Facebook API calls
+const { EMAIL_CONFIG, transporter } = require("../services/mailConfig");
+const {
+  getLogoAttachment,
+  getLogoMarkup,
+  buildEmailShell,
+} = require('../services/emailTemplate');
+const {
+  buildInvoiceHtml,
+  generateInvoicePngBuffer,
+} = require('../services/invoiceRenderer.service');
 
 // Initialize Google OAuth client
 const client = new OAuth2Client('58815171868-hlpv60089h5p8286562i2bde9htijb74.apps.googleusercontent.com');
-
-const transporter = nodemailer.createTransport({
-  service: "Gmail",
-  auth: {
-    user: "baivabbidari876@gmail.com",
-    pass: "djuw xkgi vbpi vwqc",
-  },
-});
 
 // Helper function to generate JWT token
 const generateToken = (user, role) => {
@@ -757,14 +758,27 @@ exports.forgotPassword = async (req, res) => {
 
     // Send email
     await transporter.sendMail({
+      from: EMAIL_CONFIG.sender,
       to: user.email,
       subject: "Password Reset Request",
-      html: `
-        <h3>Password Reset</h3>
-        <p>Click the link below to reset your password:</p>
-        <a href="${resetLink}">${resetLink}</a>
-        <p>This link will expire in 15 minutes.</p>
-      `,
+      html: buildEmailShell({
+        subject: 'Password Reset Request',
+        title: 'Password Reset Request',
+        subtitle: 'Secure account access',
+        bodyHtml: `
+          <p>We received a request to reset your password.</p>
+          <p>Click the secure link below to create a new password:</p>
+          <p style="margin: 14px 0; word-break: break-all;">
+            <a href="${resetLink}" style="color:#2563eb; text-decoration:none;">${resetLink}</a>
+          </p>
+          <p>This link will expire in 15 minutes.</p>
+          <p>If you did not request this, you can ignore this email.</p>
+        `,
+        footerNote: 'For your security, this link expires automatically.',
+        contactPhone: '9861698400',
+        contactEmail: EMAIL_CONFIG.sender,
+      }),
+      attachments: getLogoAttachment(),
     });
 
     return res.json({ message: "Password reset link sent to email" });
@@ -866,570 +880,38 @@ exports.sendInvoiceEmail = async (req, res) => {
       });
     }
 
-    // Calculate order totals
-    const totalQuantity = order.products.reduce((sum, product) => sum + (product.quantity || 0), 0);
-    const subtotal = order.products.reduce((sum, product) => sum + (product.price || 0), 0);
-    const shippingPrice = order.shippingPrice || 0;
-    const giftBoxCharge = order.includeGiftBox ? 400 : 0;
-    const totalAmount = order.totalAmount || (subtotal + shippingPrice + giftBoxCharge);
+    const emailHtml = buildInvoiceHtml({
+      order,
+      customerEmail,
+      customerName,
+      senderEmail: EMAIL_CONFIG.sender,
+      title: 'Invoice',
+    });
 
-    // Format currency
-    const formatCurrency = (amount) => `Rs. ${amount.toLocaleString('en-NP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const invoicePng = await generateInvoicePngBuffer({
+      order,
+      customerEmail,
+      customerName,
+      senderEmail: EMAIL_CONFIG.sender,
+      title: 'Invoice',
+    });
 
-    // Create modern invoice HTML
-    const emailHtml = `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Invoice - ${order.productOrderId || order._id}</title>
-        <style>
-          * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-          }
-          
-          body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #2c3e50;
-            background-color: #f4f6f9;
-            padding: 20px;
-          }
-          
-          .invoice-container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: #ffffff;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-            border-radius: 8px;
-            overflow: hidden;
-          }
-          
-          /* Header Section */
-          .invoice-header {
-            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-            color: #ffffff;
-            padding: 40px 40px 30px;
-          }
-          
-          .header-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 30px;
-          }
-          
-          .company-info {
-            flex: 1;
-          }
-          
-          .company-name {
-            font-size: 32px;
-            font-weight: 700;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-          }
-          
-          .company-tagline {
-            font-size: 14px;
-            opacity: 0.9;
-            font-weight: 300;
-          }
-          
-          .invoice-title {
-            text-align: right;
-            flex: 1;
-          }
-          
-          .invoice-title h1 {
-            font-size: 36px;
-            font-weight: 700;
-            margin-bottom: 5px;
-          }
-          
-          .invoice-status {
-            display: inline-block;
-            background: rgba(255, 255, 255, 0.2);
-            padding: 6px 16px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-          }
-          
-          .invoice-meta {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 6px;
-          }
-          
-          .meta-item {
-            text-align: center;
-          }
-          
-          .meta-label {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            opacity: 0.8;
-            margin-bottom: 5px;
-          }
-          
-          .meta-value {
-            font-size: 16px;
-            font-weight: 600;
-          }
-          
-          /* Content Section */
-          .invoice-content {
-            padding: 40px;
-          }
-          
-          /* Parties Section */
-          .parties-section {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 40px;
-          }
-          
-          .party-card {
-            background: #f8fafc;
-            padding: 20px;
-            border-radius: 6px;
-            border-left: 4px solid #cbd5e1;
-          }
-          
-          .party-card.customer {
-            border-left-color: #3b82f6;
-          }
-          
-          .party-title {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #64748b;
-            margin-bottom: 12px;
-            font-weight: 600;
-          }
-          
-          .party-name {
-            font-size: 18px;
-            font-weight: 700;
-            color: #1e293b;
-            margin-bottom: 8px;
-          }
-          
-          .party-details {
-            font-size: 14px;
-            color: #475569;
-            line-height: 1.8;
-          }
-          
-          .party-details p {
-            margin: 4px 0;
-          }
-          
-          .delivery-badge {
-            display: inline-block;
-            background: #dbeafe;
-            color: #1e40af;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-top: 8px;
-            text-transform: uppercase;
-          }
-          
-          .payment-badge {
-            display: inline-block;
-            background: #dcfce7;
-            color: #166534;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-top: 4px;
-            text-transform: uppercase;
-          }
-          
-          /* Items Table */
-          .items-section {
-            margin-bottom: 30px;
-          }
-          
-          .section-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: #1e293b;
-            margin-bottom: 16px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #e2e8f0;
-          }
-          
-          .items-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-          }
-          
-          .items-table thead {
-            background: #f1f5f9;
-          }
-          
-          .items-table th {
-            padding: 12px;
-            text-align: left;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #64748b;
-            font-weight: 600;
-            border-bottom: 2px solid #e2e8f0;
-          }
-          
-          .items-table th:last-child,
-          .items-table td:last-child {
-            text-align: right;
-          }
-          
-          .items-table td {
-            padding: 16px 12px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #334155;
-          }
-          
-          .items-table tbody tr:hover {
-            background: #f8fafc;
-          }
-          
-          .item-name {
-            font-weight: 600;
-            color: #1e293b;
-          }
-          
-          /* Summary Section */
-          .summary-section {
-            background: #f8fafc;
-            border-radius: 6px;
-            padding: 24px;
-            margin-bottom: 30px;
-          }
-          
-          .summary-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            font-size: 15px;
-          }
-          
-          .summary-row.subtotal {
-            border-bottom: 1px solid #e2e8f0;
-          }
-          
-          .summary-label {
-            color: #64748b;
-          }
-          
-          .summary-value {
-            font-weight: 600;
-            color: #1e293b;
-          }
-          
-          .summary-row.total {
-            padding-top: 16px;
-            margin-top: 8px;
-            border-top: 2px solid #cbd5e1;
-            font-size: 20px;
-          }
-          
-          .summary-row.total .summary-label {
-            color: #1e293b;
-            font-weight: 700;
-          }
-          
-          .summary-row.total .summary-value {
-            color: #1e3a8a;
-            font-weight: 700;
-            font-size: 24px;
-          }
-          
-          /* Payment Details */
-          .payment-details {
-            background: #fef3c7;
-            border-left: 4px solid #f59e0b;
-            padding: 20px;
-            border-radius: 6px;
-            margin-bottom: 30px;
-          }
-          
-          .payment-details .section-title {
-            color: #92400e;
-            font-size: 16px;
-            border-bottom: none;
-            margin-bottom: 12px;
-          }
-          
-          .payment-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            font-size: 15px;
-          }
-          
-          .payment-row.balance {
-            padding-top: 12px;
-            margin-top: 8px;
-            border-top: 2px solid #fbbf24;
-            font-size: 18px;
-            font-weight: 700;
-          }
-          
-          /* Footer */
-          .invoice-footer {
-            background: #f8fafc;
-            padding: 30px 40px;
-            text-align: center;
-            border-top: 1px solid #e2e8f0;
-          }
-          
-          .thank-you {
-            font-size: 18px;
-            font-weight: 600;
-            color: #1e293b;
-            margin-bottom: 12px;
-          }
-          
-          .contact-info {
-            font-size: 14px;
-            color: #64748b;
-            margin-bottom: 16px;
-          }
-          
-          .social-links {
-            margin-top: 16px;
-          }
-          
-          .footer-note {
-            font-size: 12px;
-            color: #94a3b8;
-            margin-top: 16px;
-            font-style: italic;
-          }
-          
-          /* Responsive Design */
-          @media only screen and (max-width: 600px) {
-            body {
-              padding: 10px;
-            }
-            
-            .invoice-header {
-              padding: 30px 20px 20px;
-            }
-            
-            .header-top {
-              flex-direction: column;
-            }
-            
-            .invoice-title {
-              text-align: left;
-              margin-top: 20px;
-            }
-            
-            .invoice-meta {
-              grid-template-columns: 1fr;
-              gap: 15px;
-            }
-            
-            .invoice-content {
-              padding: 20px;
-            }
-            
-            .parties-section {
-              grid-template-columns: 1fr;
-              gap: 20px;
-            }
-            
-            .items-table {
-              font-size: 12px;
-            }
-            
-            .items-table th,
-            .items-table td {
-              padding: 8px 6px;
-            }
-            
-            .company-name {
-              font-size: 24px;
-            }
-            
-            .invoice-title h1 {
-              font-size: 28px;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="invoice-container">
-          <!-- Header -->
-          <div class="invoice-header">
-            <div class="header-top">
-              <div class="company-info">
-                <div class="company-name">AABHUSHAN GALLERY INVOICE</div>
-                <div class="company-tagline">Premium Jewelry & Accessories</div>
-              </div>
-              <div class="invoice-title">
-           
-                <span class="invoice-status">Confirmed</span>
-              </div>
-            </div>
-            
-            <div class="invoice-meta">
-              <div class="meta-item">
-                <div class="meta-label">Invoice Number</div>
-                <div class="meta-value">#${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Invoice Date</div>
-                <div class="meta-value">${new Date(order.OrderedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Total Items</div>
-                <div class="meta-value">${order.products.length}</div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Content -->
-          <div class="invoice-content">
-            <!-- Parties Information -->
-            <div class="parties-section">
-              <div class="party-card">
-                <div class="party-title">From</div>
-                <div class="party-name">Aabhushan Gallery</div>
-                <div class="party-details">
-                  <p>Kalimati, Kathmandu</p>
-                  <p>Nepal 44600</p>
-                  <p><strong>Phone:</strong> 9861698400</p>
-                  <p><strong>Email:</strong> abhushangallery2023@gmail.com</p>
-                </div>
-              </div>
-              
-              <div class="party-card customer">
-                <div class="party-title">Bill To</div>
-                <div class="party-name">${customerName || 'Valued Customer'}</div>
-                <div class="party-details">
-                  <p>${order.shippingLocation}</p>
-                  ${order.locationAddress ? `<p>${order.locationAddress}</p>` : ''}
-                  <p><strong>Phone:</strong> ${order.phoneNumber}</p>
-                  <p><strong>Email:</strong> ${customerEmail}</p>
-                  <div>
-                    <span class="delivery-badge">${order.isHomeDelivery ? '🏠 Home Delivery' : '🏢 Office Delivery'}</span>
-                    <span class="payment-badge">${order.paymentMethod === 'phonePay' ? '📱 Phone Pay' : '💰 Cash on Delivery'}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <!-- Order Items -->
-            <div class="items-section">
-              <div class="section-title">Order Details</div>
-              <table class="items-table">
-                <thead>
-                  <tr>
-                    <th style="width: 50%;">Item Description</th>
-                    <th style="width: 15%; text-align: center;">Quantity</th>
-                    <th style="width: 20%;">Unit Price</th>
-                    <th style="width: 15%;">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${order.products.map(product => `
-                    <tr>
-                      <td>
-                        <div class="item-name">${product.productId?.name || 'Product'}</div>
-                      </td>
-                      <td style="text-align: center;">${product.quantity || 1}</td>
-                      <td>${formatCurrency((product.price || 0) / (product.quantity || 1))}</td>
-                      <td>${formatCurrency(product.price || 0)}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-            
-            <!-- Summary -->
-            <div class="summary-section">
-              <div class="summary-row subtotal">
-                <span class="summary-label">Subtotal (${totalQuantity} items)</span>
-                <span class="summary-value">${formatCurrency(subtotal)}</span>
-              </div>
-              <div class="summary-row">
-                <span class="summary-label">Shipping Fee</span>
-                <span class="summary-value">${formatCurrency(shippingPrice)}</span>
-              </div>
-              ${giftBoxCharge > 0 ? `
-              <div class="summary-row">
-                <span class="summary-label">🎁 Gift Box Charge</span>
-                <span class="summary-value">${formatCurrency(giftBoxCharge)}</span>
-              </div>
-              ` : ''}
-              <div class="summary-row total">
-                <span class="summary-label">TOTAL AMOUNT</span>
-                <span class="summary-value">${formatCurrency(totalAmount)}</span>
-              </div>
-            </div>
-            
-            ${order.isInsideValley === false ? `
-            <!-- Payment Details for Outside Valley -->
-            <div class="payment-details">
-              <div class="section-title">💳 Payment Summary</div>
-              <div class="payment-row">
-                <span>Advance Paid</span>
-                <span><strong>${formatCurrency(300)}</strong></span>
-              </div>
-              <div class="payment-row balance">
-                <span>Balance Due</span>
-                <span style="color: #dc2626;">${formatCurrency(totalAmount - 300)}</span>
-              </div>
-              <p style="font-size: 13px; color: #92400e; margin-top: 12px;">
-                ⚠️ Please keep the remaining balance ready for payment upon delivery.
-              </p>
-            </div>
-            ` : ''}
-            
-          </div>
-          
-          <!-- Footer -->
-          <div class="invoice-footer">
-            <div class="thank-you">Thank You for Your Order! 🎉</div>
-            <div class="contact-info">
-              For any questions or concerns, please contact us at:<br>
-              <strong>📞 9861698400</strong> | <strong>✉️ abhushangallery2023@gmail.com</strong>
-            </div>
-            <div class="footer-note">
-              This is an automated invoice. Please keep it for your records.
-            </div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
+    const attachments = [...getLogoAttachment()];
+    if (invoicePng) {
+      attachments.push({
+        filename: `invoice-${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}.png`,
+        content: invoicePng,
+        contentType: 'image/png',
+      });
+    }
 
     // Send email using transporter
     await transporter.sendMail({
-      from: '"Aabhushan Gallery" <baivabbidari876@gmail.com>',
+      from: EMAIL_CONFIG.sender,
       to: customerEmail,
-      subject: `Invoice #${order.productOrderId || order._id.toString().slice(-8).toUpperCase()} - Aabhushan Gallery`,
+      subject: `Invoice #${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}`,
       html: emailHtml,
+      attachments,
     });
 
     console.log(`Invoice email sent successfully to ${customerEmail} for order ${orderId}`);

@@ -1,28 +1,28 @@
 const Orders = require("../modals/orderModal");
 const { Product } = require("../modals/product.modal");
+const { sendOrderDispatchedNotification } = require("../services/orderNotificationService");
 
 // Mark order(s) as scanned and update sales - supports both single and bulk operations
 const markOrderAsScanned = async (req, res) => {
   try {
-    const { orderId } = req.body;
 
-    if (!orderId) {
+    // Accept both 'orderId' and 'productOrderId' for compatibility
+    let orderIds = req.body.productOrderId || req.body.orderId;
+    if (!orderIds) {
       return res.status(400).json({
         success: false,
         message: "Order ID is required"
       });
     }
-
-    // Check if orderId is an array (bulk operation) or single value
-    const isBulkOperation = Array.isArray(orderId);
-    const orderIds = isBulkOperation ? orderId : [orderId];
-
+    // Support both array and single value
+    if (!Array.isArray(orderIds)) orderIds = [orderIds];
     if (orderIds.length === 0) {
       return res.status(400).json({
         success: false,
         message: "At least one Order ID is required"
       });
     }
+    const isBulkOperation = orderIds.length > 1;
 
     // Find all orders by productOrderId
     const orders = await Orders.find({ productOrderId: { $in: orderIds } })
@@ -40,11 +40,16 @@ const markOrderAsScanned = async (req, res) => {
     const results = {
       successful: [],
       alreadyScanned: [],
-      failed: []
+      failed: [],
+      notifications: []
     };
+
+
 
     // Process each order
     for (const order of orders) {
+
+      console.log(order,"order value")
       try {
         // Check if already scanned
         if (order.isScanned) {
@@ -54,22 +59,19 @@ const markOrderAsScanned = async (req, res) => {
           });
           continue;
         }
-
         // Update order as scanned
         order.isScanned = true;
         order.scannedAt = new Date();
         await order.save();
 
-        // Update product stock quantities and sales data
+        // Stock is already reduced during order creation; avoid decrementing again on scan.
         for (const item of order.products) {
+
+                console.log(item,"item value")
           if (item.productId) {
             await Product.findByIdAndUpdate(
               item.productId._id,
               {
-                $inc: {
-                  stockQuantity: -item.quantity,
-                  totalSales: item.totalAmount
-                },
                 $set: {
                   lastSoldAt: new Date()
                 }
@@ -81,6 +83,14 @@ const markOrderAsScanned = async (req, res) => {
         results.successful.push({
           orderId: order.productOrderId,
           order: order
+        });
+
+        // Send customer notifications after successful scan confirmation.
+        const notificationStatus = await sendOrderDispatchedNotification(order);
+        results.notifications.push({
+          orderId: order.productOrderId,
+          email: notificationStatus.email,
+          whatsapp: notificationStatus.whatsapp
         });
 
       } catch (error) {
@@ -130,7 +140,8 @@ const markOrderAsScanned = async (req, res) => {
       results: {
         successful: results.successful,
         alreadyScanned: results.alreadyScanned,
-        failed: results.failed
+        failed: results.failed,
+        notifications: results.notifications
       },
       summary: {
         total: orderIds.length,
@@ -278,8 +289,60 @@ const getSalesAnalytics = async (req, res) => {
   }
 };
 
+// Remove order from sales analytics by resetting scan status
+const removeSalesRecord = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required"
+      });
+    }
+
+    const query = orderId.length === 24
+      ? { $or: [{ _id: orderId }, { productOrderId: orderId }] }
+      : { productOrderId: orderId };
+
+    const order = await Orders.findOne(query);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    if (!order.isScanned) {
+      return res.status(400).json({
+        success: false,
+        message: "Order is not in scanned sales data"
+      });
+    }
+
+    order.isScanned = false;
+    order.scannedAt = null;
+    await order.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Sales data removed successfully",
+      orderId: order.productOrderId || order._id
+    });
+  } catch (error) {
+    console.error("Remove sales record error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   markOrderAsScanned,
   getScannedOrders,
-  getSalesAnalytics
+  getSalesAnalytics,
+  removeSalesRecord
 };

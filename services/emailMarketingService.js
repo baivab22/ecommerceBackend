@@ -1,14 +1,6 @@
 const User = require("../modals/userModal");
-const nodemailer = require("nodemailer");
-
-// Email transporter (using your existing setup)
-const transporter = nodemailer.createTransport({
-  service: "Gmail",
-  auth: {
-    user: "baivabbidari876@gmail.com",
-    pass: "djuw xkgi vbpi vwqc",
-  },
-});
+const { EMAIL_CONFIG, transporter } = require("./mailConfig");
+const { getLogoAttachment, buildEmailShell } = require('./emailTemplate');
 
 const emailMarketingService = {
   /**
@@ -77,115 +69,33 @@ const emailMarketingService = {
         const batch = users.slice(i, i + batchSize);
         const batchPromises = batch.map(async (user) => {
           try {
+            const marketingBody = `
+              <div>
+                ${htmlContent}
+              </div>
+              <p style="margin-top:18px; font-size:13px; color:#6b7280;">
+                You are receiving this email because you subscribed to updates.
+              </p>
+              <p style="margin-top:8px; font-size:13px;">
+                <a href="https://youwebsite.com/unsubscribe?email=${user.email}" style="color:#2563eb; text-decoration:none;">Unsubscribe from marketing emails</a>
+              </p>
+            `;
+
             const mailOptions = {
-              from: '"Aabhushan Gallery" <baivabbidari876@gmail.com>',
+              from: EMAIL_CONFIG.sender,
               to: user.email,
               subject: subject,
-              html: `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                  <meta charset="utf-8">
-                  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                  <title>${subject}</title>
-                  <style>
-                    body { 
-                      font-family: 'Arial', sans-serif; 
-                      line-height: 1.6; 
-                      color: #333; 
-                      margin: 0; 
-                      padding: 0; 
-                      background-color: #f4f4f4;
-                    }
-                    .container { 
-                      max-width: 600px; 
-                      margin: 0 auto; 
-                      background: #ffffff; 
-                    }
-                    .header { 
-                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                      color: white; 
-                      padding: 30px 20px; 
-                      text-align: center; 
-                    }
-                    .brand { 
-                      font-size: 28px; 
-                      font-weight: bold; 
-                      margin: 0; 
-                    }
-                    .tagline { 
-                      font-size: 16px; 
-                      margin: 10px 0 0 0; 
-                      opacity: 0.9; 
-                    }
-                    .content { 
-                      padding: 30px 20px; 
-                    }
-                    .footer { 
-                      background: #f8f9fa; 
-                      padding: 20px; 
-                      text-align: center; 
-                      color: #666; 
-                      font-size: 12px; 
-                      border-top: 1px solid #e9ecef;
-                    }
-                    .unsubscribe { 
-                      margin-top: 15px; 
-                      color: #999; 
-                    }
-                    .unsubscribe a { 
-                      color: #666; 
-                      text-decoration: none; 
-                    }
-                    img { 
-                      max-width: 100%; 
-                      height: auto; 
-                    }
-                    .button { 
-                      display: inline-block; 
-                      padding: 12px 30px; 
-                      background: #667eea; 
-                      color: white; 
-                      text-decoration: none; 
-                      border-radius: 5px; 
-                      margin: 15px 0; 
-                    }
-                    @media only screen and (max-width: 600px) {
-                      .container { 
-                        width: 100% !important; 
-                      }
-                      .content { 
-                        padding: 20px 15px; 
-                      }
-                      .header { 
-                        padding: 20px 15px; 
-                      }
-                    }
-                  </style>
-                </head>
-                <body>
-                  <div class="container">
-                    <div class="header">
-                      <h1 class="brand">AABHUSHAN GALLERY</h1>
-                      <p class="tagline">Exquisite Jewelry Collection</p>
-                    </div>
-                    
-                    <div class="content">
-                      ${htmlContent}
-                    </div>
-                    
-                    <div class="footer">
-                      <p>&copy; ${new Date().getFullYear()} Aabhushan Gallery. All rights reserved.</p>
-                      <p>Kalimati, Kathmandu, Nepal | 9861698400</p>
-                      <div class="unsubscribe">
-                        <a href="https://youwebsite.com/unsubscribe?email=${user.email}">Unsubscribe from marketing emails</a>
-                      </div>
-                    </div>
-                  </div>
-                </body>
-                </html>
-              `,
-              text: previewText || subject
+              html: buildEmailShell({
+                subject,
+                title: subject,
+                subtitle: 'Latest updates curated for you',
+                bodyHtml: marketingBody,
+                footerNote: 'You are receiving this message because you subscribed to updates.',
+                contactPhone: '9861698400',
+                contactEmail: EMAIL_CONFIG.sender,
+              }),
+              text: previewText || subject,
+              attachments: getLogoAttachment()
             };
 
             await transporter.sendMail(mailOptions);
