@@ -281,6 +281,107 @@ const buildInvoiceHtml = ({
   `;
 };
 
+const escapeXml = (value) =>
+  String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const buildInvoiceSvg = ({ order, customerEmail, customerName, senderEmail, title = 'Order Confirmation' }) => {
+  const orderId = order?.productOrderId || String(order?._id || '').slice(-8).toUpperCase();
+  const orderDate = order?.OrderedAt ? new Date(order.OrderedAt) : new Date();
+  const items = order?.products || [];
+
+  const totalQuantity = items.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
+  const subtotal = items.reduce((sum, item) => sum + Number(item?.price || 0), 0);
+  const shippingPrice = Number(order?.shippingPrice || 0);
+  const giftBoxCharge = Number(order?.includeGiftBox ? 400 : order?.giftBoxCharge || 0);
+  const totalAmount = Number(order?.totalAmount || subtotal + shippingPrice + giftBoxCharge);
+
+  const rowHeight = 44;
+  const tableStartY = 310;
+  const rowsMax = 8;
+  const visibleItems = items.slice(0, rowsMax);
+  const rows = visibleItems
+    .map((item, index) => {
+      const quantity = Number(item?.quantity || 1);
+      const lineTotal = Number(item?.price || 0);
+      const unitPrice = quantity > 0 ? lineTotal / quantity : lineTotal;
+      const y = tableStartY + (index + 1) * rowHeight;
+
+      return `
+        <line x1="20" y1="${y}" x2="1160" y2="${y}" stroke="#e5e7eb" stroke-width="1" />
+        <text x="40" y="${y - 14}" font-size="20" fill="#111827">${index + 1}</text>
+        <text x="120" y="${y - 14}" font-size="20" fill="#111827">${escapeXml(item?.productId?.name || 'Product')}</text>
+        <text x="730" y="${y - 14}" font-size="20" fill="#111827" text-anchor="middle">${quantity}</text>
+        <text x="940" y="${y - 14}" font-size="20" fill="#111827" text-anchor="end">${escapeXml(formatCurrency(unitPrice))}</text>
+        <text x="1130" y="${y - 14}" font-size="20" fill="#111827" text-anchor="end">${escapeXml(formatCurrency(lineTotal))}</text>
+      `;
+    })
+    .join('');
+
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="1660" viewBox="0 0 1180 1660">
+    <rect width="1180" height="1660" fill="#f3f4f6" />
+    <rect x="10" y="10" width="1160" height="1640" rx="12" fill="#ffffff" stroke="#e5e7eb" />
+
+    <rect x="10" y="10" width="1160" height="280" rx="12" fill="#edf2f7" />
+    <text x="825" y="130" font-size="56" font-weight="700" fill="#111827">${escapeXml(title)}</text>
+    <text x="825" y="170" font-size="24" fill="#4b5563">Order #${escapeXml(orderId)}</text>
+    <text x="45" y="90" font-size="34" font-weight="700" fill="#4b5563">ABHUSHAN GALLERY</text>
+
+    <rect x="25" y="325" width="360" height="76" rx="10" fill="#f9fafb" stroke="#e5e7eb" />
+    <rect x="410" y="325" width="360" height="76" rx="10" fill="#f9fafb" stroke="#e5e7eb" />
+    <rect x="795" y="325" width="360" height="76" rx="10" fill="#f9fafb" stroke="#e5e7eb" />
+    <text x="42" y="353" font-size="16" fill="#6b7280">INVOICE NO</text>
+    <text x="42" y="384" font-size="24" font-weight="700" fill="#111827">${escapeXml(orderId)}</text>
+    <text x="427" y="353" font-size="16" fill="#6b7280">DATE</text>
+    <text x="427" y="384" font-size="24" font-weight="700" fill="#111827">${orderDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</text>
+    <text x="812" y="353" font-size="16" fill="#6b7280">ITEMS</text>
+    <text x="812" y="384" font-size="24" font-weight="700" fill="#111827">${totalQuantity}</text>
+
+    <rect x="25" y="430" width="560" height="210" rx="10" fill="#ffffff" stroke="#e5e7eb" />
+    <rect x="595" y="430" width="560" height="210" rx="10" fill="#ffffff" stroke="#e5e7eb" />
+    <text x="45" y="468" font-size="30" font-weight="700" fill="#111827">From</text>
+    <text x="45" y="505" font-size="24" fill="#374151">Kalimati, Kathmandu, Nepal</text>
+    <text x="45" y="540" font-size="24" fill="#374151">Phone: 9861698400</text>
+    <text x="45" y="575" font-size="24" fill="#374151">Email: ${escapeXml(senderEmail || 'support@store.com')}</text>
+
+    <text x="615" y="468" font-size="30" font-weight="700" fill="#111827">Bill To</text>
+    <text x="615" y="505" font-size="24" fill="#374151">${escapeXml(customerName || 'Valued Customer')}</text>
+    <text x="615" y="540" font-size="22" fill="#374151">${escapeXml(order?.shippingLocation || '')}</text>
+    <text x="615" y="575" font-size="22" fill="#374151">Phone: ${escapeXml(order?.phoneNumber || 'N/A')}</text>
+    <text x="615" y="610" font-size="22" fill="#374151">Email: ${escapeXml(customerEmail || 'N/A')}</text>
+
+    <rect x="20" y="675" width="1140" height="60" fill="#f9fafb" stroke="#e5e7eb" />
+    <text x="40" y="714" font-size="20" font-weight="700" fill="#374151">#</text>
+    <text x="120" y="714" font-size="20" font-weight="700" fill="#374151">Item</text>
+    <text x="730" y="714" font-size="20" font-weight="700" fill="#374151" text-anchor="middle">Qty</text>
+    <text x="940" y="714" font-size="20" font-weight="700" fill="#374151" text-anchor="end">Unit Price</text>
+    <text x="1130" y="714" font-size="20" font-weight="700" fill="#374151" text-anchor="end">Amount</text>
+
+    ${rows}
+
+    <rect x="720" y="1120" width="440" height="220" rx="10" fill="#f9fafb" stroke="#e5e7eb" />
+    <text x="750" y="1175" font-size="24" fill="#374151">Subtotal</text>
+    <text x="1130" y="1175" font-size="24" fill="#374151" text-anchor="end">${escapeXml(formatCurrency(subtotal))}</text>
+    <text x="750" y="1218" font-size="24" fill="#374151">Shipping Fee</text>
+    <text x="1130" y="1218" font-size="24" fill="#374151" text-anchor="end">${escapeXml(formatCurrency(shippingPrice))}</text>
+    <text x="750" y="1261" font-size="24" fill="#374151">Gift Box Charge</text>
+    <text x="1130" y="1261" font-size="24" fill="#374151" text-anchor="end">${escapeXml(formatCurrency(giftBoxCharge))}</text>
+    <line x1="740" y1="1290" x2="1135" y2="1290" stroke="#d1d5db" stroke-width="1" />
+    <text x="750" y="1335" font-size="36" font-weight="700" fill="#111827">Total</text>
+    <text x="1130" y="1335" font-size="36" font-weight="700" fill="#111827" text-anchor="end">${escapeXml(formatCurrency(totalAmount))}</text>
+
+    <line x1="20" y1="1470" x2="1160" y2="1470" stroke="#d1d5db" stroke-dasharray="8 6" />
+    <text x="590" y="1510" font-size="22" fill="#6b7280" text-anchor="middle">Thank you for your order. This is a system-generated document.</text>
+  </svg>`;
+};
+
+const generateInvoiceSvgBuffer = (params) => Buffer.from(buildInvoiceSvg(params), 'utf8');
+
 const generateInvoicePngBuffer = async ({
   order,
   customerEmail,
@@ -329,4 +430,5 @@ const generateInvoicePngBuffer = async ({
 module.exports = {
   buildInvoiceHtml,
   generateInvoicePngBuffer,
+  generateInvoiceSvgBuffer,
 };

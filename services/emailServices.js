@@ -3,6 +3,7 @@ const { Product } = require("../modals/product.modal");
 const {
   buildInvoiceHtml,
   generateInvoicePngBuffer,
+  generateInvoiceSvgBuffer,
 } = require('./invoiceRenderer.service');
 
 const sendOutOfStockNotification = async (newOutOfStockProducts) => {
@@ -322,21 +323,31 @@ const sendOrderConfirmationToCustomer = async (order) => {
       title: 'Order Confirmation',
     });
 
-    const attachments = [];
-    if (invoicePng) {
-      attachments.push({
-        filename: `order-confirmation-${orderId}.png`,
-        content: invoicePng,
-        contentType: 'image/png',
-      });
-    }
+    // Always include exactly one image attachment.
+    const attachment = invoicePng
+      ? {
+          filename: `order-confirmation-${orderId}.png`,
+          content: invoicePng,
+          contentType: 'image/png',
+        }
+      : {
+          filename: `order-confirmation-${orderId}.svg`,
+          content: generateInvoiceSvgBuffer({
+            order,
+            customerEmail,
+            customerName,
+            senderEmail: EMAIL_CONFIG.sender,
+            title: 'Order Confirmation',
+          }),
+          contentType: 'image/svg+xml',
+        };
 
     await transporter.sendMail({
       from: EMAIL_CONFIG.sender,
       to: customerEmail,
       subject: confirmationSubject,
       html: confirmationHtml,
-      attachments,
+      attachments: [attachment],
     });
 
     return true;
