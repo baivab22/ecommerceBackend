@@ -445,7 +445,7 @@ const generateInvoicePngBuffer = async ({
     });
 
     const page = await browser.newPage();
-    await page.setViewport({ width: 980, height: 1400, deviceScaleFactor: 2 });
+    await page.setViewport({ width: 1080, height: 1520, deviceScaleFactor: 3 });
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
     const invoiceElement = await page.$('.sheet');
@@ -464,8 +464,56 @@ const generateInvoicePngBuffer = async ({
   }
 };
 
+const generateInvoicePngFromSvgBuffer = async ({
+  order,
+  customerEmail,
+  customerName,
+  senderEmail,
+  title,
+}) => {
+  let browser;
+
+  try {
+    const puppeteer = require('puppeteer');
+    const svgMarkup = buildInvoiceSvg({
+      order,
+      customerEmail,
+      customerName,
+      senderEmail,
+      title,
+    });
+
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1640, height: 1540, deviceScaleFactor: 2 });
+    await page.setContent(
+      `<!DOCTYPE html><html><body style="margin:0;background:#fff;">${svgMarkup}</body></html>`,
+      { waitUntil: 'networkidle0' }
+    );
+
+    const svgElement = await page.$('svg');
+    if (!svgElement) {
+      return null;
+    }
+
+    return await svgElement.screenshot({ type: 'png' });
+  } catch (error) {
+    console.error('Failed to generate PNG from SVG invoice:', error.message);
+    return null;
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => null);
+    }
+  }
+};
+
 module.exports = {
   buildInvoiceHtml,
   generateInvoicePngBuffer,
+  generateInvoicePngFromSvgBuffer,
   generateInvoiceSvgBuffer,
 };

@@ -2,7 +2,7 @@ const { EMAIL_CONFIG, transporter } = require('./mailConfig');
 const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePngBuffer,
-  generateInvoiceSvgBuffer,
+  generateInvoicePngFromSvgBuffer,
 } = require('./invoiceRenderer.service');
 
 const sendOutOfStockNotification = async (newOutOfStockProducts) => {
@@ -345,24 +345,27 @@ const sendOrderConfirmationToCustomer = async (order) => {
       title: 'Order Confirmation',
     });
 
-    // Always include exactly one image attachment.
-    const attachment = invoicePng
-      ? {
-          filename: `order-confirmation-${orderId}.png`,
-          content: invoicePng,
-          contentType: 'image/png',
-        }
-      : {
-          filename: `order-confirmation-${orderId}.svg`,
-          content: generateInvoiceSvgBuffer({
-            order,
-            customerEmail,
-            customerName,
-            senderEmail: EMAIL_CONFIG.sender,
-            title: 'Order Confirmation',
-          }),
-          contentType: 'image/svg+xml',
-        };
+    const fallbackPng = invoicePng
+      ? null
+      : await generateInvoicePngFromSvgBuffer({
+          order,
+          customerEmail,
+          customerName,
+          senderEmail: EMAIL_CONFIG.sender,
+          title: 'Order Confirmation',
+        });
+
+    const finalInvoicePng = invoicePng || fallbackPng;
+    if (!finalInvoicePng) {
+      console.error('Unable to generate PNG invoice attachment for order:', orderId);
+      return false;
+    }
+
+    const attachment = {
+      filename: `order-confirmation-${orderId}.png`,
+      content: finalInvoicePng,
+      contentType: 'image/png',
+    };
 
     await transporter.sendMail({
       from: EMAIL_CONFIG.sender,
