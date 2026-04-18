@@ -7,6 +7,280 @@ const {
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
 } = require("../services/emailServices");
+const { sendOrderDeliveryStatusChangedNotification } = require('../services/orderNotificationService');
+const {
+  createNcmOrder,
+  parseNcmError,
+  fetchNcmBranches,
+  fetchNcmBranchDetails,
+  fetchNcmShippingRate,
+  fetchNcmOrderDetails,
+  fetchNcmOrderComments,
+  fetchNcmLastBulkComments,
+  fetchNcmOrderStatus,
+  fetchBulkNcmOrderStatuses,
+  createNcmOrderComment,
+  createVendorTicket,
+  createVendorCodTransferTicket,
+  closeVendorTicket,
+  fetchVendorStaffs,
+  markOrderReturn,
+  createExchangeOrder,
+  redirectOrder,
+  upsertWebhookUrl,
+  testWebhookUrl,
+} = require('../services/ncmService');
+
+const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
+const generateCompactOrderId = () => {
+  const ts = Date.now().toString(36).toUpperCase().slice(-4);
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `ORD-${ts}${rand}`;
+};
+
+const normalizeProductOrderId = (incoming) => {
+  const value = String(incoming || '').trim();
+  const isTooLong = value.length > 14;
+  const invalid = !/^ORD-[A-Z0-9]{4,10}$/i.test(value);
+  if (!value || isTooLong || invalid) {
+    return generateCompactOrderId();
+  }
+  return value.toUpperCase();
+};
+
+const normalizeOrderPhone = (value) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('977') && digits.length >= 13) {
+    return digits.slice(-10);
+  }
+  if (digits.length > 10) {
+    return digits.slice(-10);
+  }
+  return digits;
+};
+
+const isValidOrderPhone = (phone) => {
+  const safe = String(phone || '');
+  return /^9\d{9}$/.test(safe) || /^\d{7,10}$/.test(safe);
+};
+
+const toArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value.data)) return value.data;
+  if (Array.isArray(value.results)) return value.results;
+  if (Array.isArray(value.statuses)) return value.statuses;
+  if (Array.isArray(value.comments)) return value.comments;
+  return [value];
+};
+
+const normalizeNcmStatuses = (rawStatuses) => {
+  return toArray(rawStatuses)
+    .map((item) => ({
+      status: String(item?.status || item?.current_status || item?.order_status || item?.state || '').trim(),
+      added_time: item?.added_time || item?.timestamp || item?.created_at || item?.updated_at || '',
+      location: String(item?.location || item?.branch || item?.current_branch || '').trim(),
+      raw: item,
+    }))
+    .filter((item) => item.status || item.added_time || item.location);
+};
+
+const normalizeNcmComments = (rawComments) => {
+  return toArray(rawComments)
+    .map((item) => ({
+      comments: String(item?.comments || item?.comment || item?.message || item?.note || '').trim(),
+      addedBy: String(item?.addedBy || item?.added_by || item?.author || item?.user || '').trim(),
+      added_time: item?.added_time || item?.timestamp || item?.created_at || item?.updated_at || '',
+      raw: item,
+    }))
+    .filter((item) => item.comments || item.addedBy || item.added_time);
+};
+
+const pickFirstString = (...values) => {
+  for (const value of values) {
+    const safe = String(value || '').trim();
+    if (safe) return safe;
+  }
+  return '';
+};
+
+const normalizeStatusForCompare = (value) => String(value || '').trim().toLowerCase();
+
+const NCM_EVENT_STATUS_MAP = {
+  pickup_completed: 'Pickup Complete',
+  sent_for_delivery: 'Sent for Delivery',
+  order_dispatched: 'Dispatched',
+  order_arrived: 'Arrived',
+  delivery_completed: 'Delivered',
+};
+
+const deriveStatusFromEvent = (event) => {
+  const key = String(event || '').trim().toLowerCase();
+  return NCM_EVENT_STATUS_MAP[key] || '';
+};
+
+const buildStatusKey = (status) => {
+  const safeStatus = String(status || '').trim().toLowerCase();
+  return safeStatus;
+};
+
+const extractWebhookOrderId = (body) => {
+  return pickFirstString(
+    body?.orderid,
+    body?.order_id,
+    body?.orderId,
+    body?.orderID,
+    body?.ncmOrderId,
+    body?.ncm_order_id,
+    body?.vref_id,
+    body?.vrefId,
+    body?.vendor_ref,
+    body?.vendor_ref_id,
+    body?.reference_id,
+    body?.id,
+    body?.data?.orderid,
+    body?.data?.order_id,
+    body?.data?.orderId,
+    body?.data?.orderID,
+    body?.data?.ncmOrderId,
+    body?.data?.ncm_order_id,
+    body?.data?.vref_id,
+    body?.data?.vrefId,
+    body?.data?.vendor_ref,
+    body?.data?.vendor_ref_id,
+    body?.data?.reference_id,
+    body?.payload?.orderid,
+    body?.payload?.order_id,
+    body?.payload?.orderId,
+    body?.payload?.orderID,
+    body?.payload?.ncmOrderId,
+    body?.payload?.ncm_order_id,
+    body?.payload?.vref_id,
+    body?.payload?.vrefId,
+    body?.payload?.vendor_ref,
+    body?.payload?.vendor_ref_id,
+    body?.payload?.reference_id
+  );
+};
+
+const extractWebhookOrderIds = (body) => {
+  const directIds = [
+    body?.order_ids,
+    body?.orderIds,
+    body?.orderIDs,
+    body?.data?.order_ids,
+    body?.data?.orderIds,
+    body?.data?.orderIDs,
+    body?.payload?.order_ids,
+    body?.payload?.orderIds,
+    body?.payload?.orderIDs,
+  ];
+
+  const normalized = [];
+  for (const candidate of directIds) {
+    if (Array.isArray(candidate)) {
+      for (const id of candidate) {
+        const safe = String(id || '').trim();
+        if (safe) normalized.push(safe);
+      }
+      continue;
+    }
+
+    if (typeof candidate === 'string') {
+      const splitIds = candidate
+        .split(',')
+        .map((id) => String(id || '').trim())
+        .filter(Boolean);
+      normalized.push(...splitIds);
+    }
+  }
+
+  const single = extractWebhookOrderId(body);
+  if (single) normalized.push(single);
+
+  return [...new Set(normalized)];
+};
+
+const extractWebhookStatus = (body) => {
+  return pickFirstString(
+    body?.status,
+    body?.orderStatus,
+    body?.order_status,
+    body?.orderstatus,
+    body?.current_status,
+    body?.state,
+    body?.data?.status,
+    body?.data?.orderStatus,
+    body?.data?.order_status,
+    body?.data?.orderstatus,
+    body?.data?.current_status,
+    body?.payload?.status,
+    body?.payload?.orderStatus,
+    body?.payload?.order_status,
+    body?.payload?.orderstatus,
+    body?.payload?.current_status
+  );
+};
+
+const extractWebhookComment = (body) => {
+  return pickFirstString(
+    body?.comments,
+    body?.comment,
+    body?.message,
+    body?.note,
+    body?.data?.comments,
+    body?.data?.comment,
+    body?.data?.message,
+    body?.payload?.comments,
+    body?.payload?.comment,
+    body?.payload?.message
+  );
+};
+
+const extractWebhookTimestamp = (body) => {
+  const raw = pickFirstString(
+    body?.timestamp,
+    body?.added_time,
+    body?.created_at,
+    body?.updated_at,
+    body?.data?.timestamp,
+    body?.data?.added_time,
+    body?.payload?.timestamp,
+    body?.payload?.added_time
+  );
+  const parsed = raw ? new Date(raw) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const buildTrackingSummary = (order, details, statuses, comments) => {
+  const latestStatus = statuses[0] || null;
+  const latestComment = comments[0] || null;
+  const statusText = String(latestStatus?.status || order?.ncmLastStatus || '').trim();
+  const statusLower = statusText.toLowerCase();
+
+  return {
+    ncmOrderId: order?.ncmOrderId || null,
+    referenceId: order?.productOrderId || order?._id || null,
+    syncStatus: order?.ncmSyncStatus || 'pending',
+    pickupCreatedAt: order?.ncmPickupCreatedAt || null,
+    destinationBranch: order?.ncmDestinationBranch || null,
+    latestStatus: statusText || null,
+    latestStatusTime: latestStatus?.added_time || order?.ncmLastStatusAt || null,
+    latestStatusLocation: latestStatus?.location || null,
+    latestComment: latestComment?.comments || order?.ncmLastComment || null,
+    latestCommentTime: latestComment?.added_time || order?.ncmLastCommentAt || null,
+    latestCommentBy: latestComment?.addedBy || null,
+    lastWebhookEvent: order?.ncmLastWebhookEvent || null,
+    lastWebhookAt: order?.ncmLastWebhookAt || null,
+    statusCount: statuses.length,
+    commentCount: comments.length,
+    pickupCompleted: statusLower.includes('pickup completed') || statusLower.includes('picked up'),
+    delivered: statusLower.includes('delivered'),
+    detailsSnapshot: details && typeof details === 'object' ? details : null,
+  };
+};
 
 exports.createOrder = async (req, res) => {
   
@@ -18,7 +292,27 @@ exports.createOrder = async (req, res) => {
     //  console.log(error, "create orders error");
 
   
-    const newOrderData = new Orders(req.body);
+    const normalizedProductOrderId = normalizeProductOrderId(req.body?.productOrderId);
+    const normalizedLocationAddress = String(req.body?.locationAddress || req.body?.shippingLocation || '').trim();
+    const normalizedShippingLocation = String(req.body?.shippingLocation || req.body?.locationAddress || '').trim();
+    const normalizedPhoneNumber = normalizeOrderPhone(req.body?.phoneNumber);
+
+    if (!isValidOrderPhone(normalizedPhoneNumber)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: 'Invalid phone number. Please provide a valid phone number before placing order.',
+      });
+    }
+
+    const newOrderData = new Orders({
+      ...req.body,
+      productOrderId: normalizedProductOrderId,
+      ncmVendorRefId: normalizedProductOrderId,
+      locationAddress: normalizedLocationAddress,
+      shippingLocation: normalizedShippingLocation,
+      phoneNumber: normalizedPhoneNumber,
+    });
 
     const outOfStockProducts = [];
 
@@ -249,8 +543,9 @@ exports.updateOrderedProduct = async (req, res) => {
       return res.status(404).json({ message: 'Order not found' });
     }
 
+    const confirmRequested = isTruthy(req.body?.isConfirmed);
     const isConfirmingNow =
-      req.body?.isConfirmed === true && existingOrder.isConfirmed !== true;
+      confirmRequested && existingOrder.isConfirmed !== true;
 
     const patchData = {
       ...req.body,
@@ -260,7 +555,7 @@ exports.updateOrderedProduct = async (req, res) => {
       patchData.confirmedAt = new Date();
     }
 
-    const updatedOrder = await Orders.findByIdAndUpdate(
+    let updatedOrder = await Orders.findByIdAndUpdate(
       req.params.orderId,
       patchData,
       { new: true }
@@ -275,6 +570,89 @@ exports.updateOrderedProduct = async (req, res) => {
         },
       });
 
+    let ncmSyncMeta = {
+      success: false,
+      skipped: false,
+      ncmOrderId: null,
+      error: null,
+    };
+
+    const shouldSyncNcm =
+      updatedOrder &&
+      (
+        isConfirmingNow ||
+        (updatedOrder.isConfirmed === true && !updatedOrder.ncmOrderId)
+      );
+
+    if (shouldSyncNcm) {
+      if (updatedOrder.ncmOrderId) {
+        await Orders.findByIdAndUpdate(updatedOrder._id, {
+          ncmSyncStatus: 'skipped',
+          ncmSyncError: null,
+        });
+
+        ncmSyncMeta = {
+          success: true,
+          skipped: true,
+          ncmOrderId: updatedOrder.ncmOrderId,
+          error: null,
+        };
+      } else {
+        try {
+          console.log('Creating NCM order for confirmed order', {
+            orderId: String(updatedOrder?._id || ''),
+            productOrderId: String(updatedOrder?.productOrderId || ''),
+          });
+
+          const ncmResult = await createNcmOrder(updatedOrder);
+
+          updatedOrder = await Orders.findByIdAndUpdate(
+            updatedOrder._id,
+            {
+              ncmOrderId: ncmResult.ncmOrderId,
+              ncmVendorRefId: updatedOrder.productOrderId || updatedOrder.ncmVendorRefId,
+              ncmPickupCreatedAt: new Date(),
+              ncmSyncStatus: 'success',
+              ncmSyncError: null,
+            },
+            { new: true }
+          )
+            .populate('userId')
+            .populate({
+              path: 'products.productId',
+              model: 'Product',
+              populate: {
+                path: 'images',
+                model: 'ProductImage',
+              },
+            });
+
+          ncmSyncMeta = {
+            success: true,
+            skipped: false,
+            ncmOrderId: ncmResult.ncmOrderId,
+            error: null,
+          };
+        } catch (ncmError) {
+          const ncmErrorMessage = parseNcmError(ncmError);
+
+          await Orders.findByIdAndUpdate(updatedOrder._id, {
+            ncmSyncStatus: 'failed',
+            ncmSyncError: ncmErrorMessage,
+          });
+
+          ncmSyncMeta = {
+            success: false,
+            skipped: false,
+            ncmOrderId: null,
+            error: ncmErrorMessage,
+          };
+
+          console.error('Failed to create NCM pickup order:', ncmErrorMessage);
+        }
+      }
+    }
+
     if (isConfirmingNow && updatedOrder) {
       try {
         const customerConfirmationSent = await sendOrderConfirmationToCustomer(updatedOrder);
@@ -288,7 +666,11 @@ exports.updateOrderedProduct = async (req, res) => {
 
     res
       .status(201)
-      .json({ data: updatedOrder, message: "successfully updated Orders" });
+      .json({
+        data: updatedOrder,
+        message: "successfully updated Orders",
+        ncm: ncmSyncMeta,
+      });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -427,5 +809,479 @@ exports.sendOutOfStockReportEmail = async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getNcmAssignedBranches = async (req, res) => {
+  try {
+    const branches = await fetchNcmBranches();
+    return res.status(200).json({ branches });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM branches' });
+  }
+};
+
+exports.getNcmOrderDetails = async (req, res) => {
+  try {
+    const orderId = req.query.orderId || req.params.orderId;
+    const data = await fetchNcmOrderDetails(orderId);
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM order details' });
+  }
+};
+
+exports.getNcmOrderComments = async (req, res) => {
+  try {
+    const orderId = req.query.orderId || req.params.orderId;
+    const data = await fetchNcmOrderComments(orderId);
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM order comments' });
+  }
+};
+
+exports.getNcmLastBulkComments = async (req, res) => {
+  try {
+    const data = await fetchNcmLastBulkComments();
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM comments' });
+  }
+};
+
+exports.getNcmOrderStatus = async (req, res) => {
+  try {
+    const orderId = req.query.orderId || req.params.orderId;
+    const data = await fetchNcmOrderStatus(orderId);
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM order status' });
+  }
+};
+
+exports.createNcmComment = async (req, res) => {
+  try {
+    const data = await createNcmOrderComment(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to create NCM comment' });
+  }
+};
+
+exports.syncOrderToNcm = async (req, res) => {
+  try {
+    const order = await Orders.findById(req.params.orderId)
+      .populate('userId')
+      .populate({
+        path: 'products.productId',
+        model: 'Product',
+        populate: {
+          path: 'images',
+          model: 'ProductImage',
+        },
+      });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.isConfirmed !== true) {
+      return res.status(400).json({
+        message: 'Order is not confirmed yet. Confirm order first before NCM sync.',
+      });
+    }
+
+    if (order.ncmOrderId) {
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        ncmOrderId: order.ncmOrderId,
+        message: 'Order already synced with NCM',
+      });
+    }
+
+    const ncmResult = await createNcmOrder(order);
+
+    await Orders.findByIdAndUpdate(order._id, {
+      ncmOrderId: ncmResult.ncmOrderId,
+      ncmVendorRefId: order.productOrderId || order.ncmVendorRefId,
+      ncmPickupCreatedAt: new Date(),
+      ncmSyncStatus: 'success',
+      ncmSyncError: null,
+    });
+
+    return res.status(200).json({
+      success: true,
+      skipped: false,
+      ncmOrderId: ncmResult.ncmOrderId,
+      message: 'Order synced to NCM successfully',
+    });
+  } catch (error) {
+    const ncmErrorMessage = parseNcmError(error);
+    return res.status(500).json({ error: ncmErrorMessage });
+  }
+};
+
+exports.getOrderTrackingDetails = async (req, res) => {
+  try {
+    const order = await Orders.findById(req.params.orderId)
+      .populate({
+        path: 'products.productId',
+        model: 'Product',
+        populate: {
+          path: 'images',
+          model: 'ProductImage',
+        },
+      })
+      .populate({ path: 'userId', model: 'User' });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const responsePayload = {
+      order,
+      ncm: {
+        details: null,
+        statuses: [],
+        comments: [],
+        summary: null,
+      },
+    };
+
+    if (order.ncmOrderId) {
+      const [detailsResult, statusesResult, commentsResult] = await Promise.allSettled([
+        fetchNcmOrderDetails(order.ncmOrderId),
+        fetchNcmOrderStatus(order.ncmOrderId),
+        fetchNcmOrderComments(order.ncmOrderId),
+      ]);
+
+      if (detailsResult.status === 'fulfilled') {
+        responsePayload.ncm.details = detailsResult.value;
+      }
+      if (statusesResult.status === 'fulfilled') {
+        responsePayload.ncm.statuses = normalizeNcmStatuses(statusesResult.value);
+      }
+      if (commentsResult.status === 'fulfilled') {
+        responsePayload.ncm.comments = normalizeNcmComments(commentsResult.value);
+      }
+    }
+
+    responsePayload.ncm.summary = buildTrackingSummary(
+      order,
+      responsePayload.ncm.details,
+      responsePayload.ncm.statuses,
+      responsePayload.ncm.comments
+    );
+
+    return res.status(200).json(responsePayload);
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch order tracking details' });
+  }
+};
+
+exports.getOrdersByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const orders = await Orders.find({ userId })
+      .sort({ date: -1 })
+      .populate({
+        path: 'products.productId',
+        model: 'Product',
+        populate: {
+          path: 'images',
+          model: 'ProductImage',
+        },
+      })
+      .populate({ path: 'userId', model: 'User' });
+
+    const includeNcm = String(req.query.includeNcm || '').toLowerCase() === 'true';
+
+    if (!includeNcm) {
+      return res.status(200).json({ orders });
+    }
+
+    const ordersWithLiveStatus = await Promise.all(
+      orders.map(async (order) => {
+        const plain = typeof order.toObject === 'function' ? order.toObject() : order;
+        if (!plain?.ncmOrderId) {
+          return {
+            ...plain,
+            ncmLiveStatus: null,
+          };
+        }
+
+        try {
+          const statuses = await fetchNcmOrderStatus(plain.ncmOrderId);
+          const normalizedStatuses = normalizeNcmStatuses(statuses);
+          return {
+            ...plain,
+            ncmLiveStatus: normalizedStatuses.length ? normalizedStatuses[0] : null,
+          };
+        } catch (_error) {
+          return {
+            ...plain,
+            ncmLiveStatus: null,
+          };
+        }
+      })
+    );
+
+    return res.status(200).json({ orders: ordersWithLiveStatus });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch user orders' });
+  }
+};
+
+exports.getNcmShippingRate = async (req, res) => {
+  try {
+    const data = await fetchNcmShippingRate(req.query || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM shipping rate' });
+  }
+};
+
+exports.getNcmBulkOrderStatuses = async (req, res) => {
+  try {
+    const data = await fetchBulkNcmOrderStatuses(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM bulk statuses' });
+  }
+};
+
+exports.createNcmVendorTicket = async (req, res) => {
+  try {
+    const data = await createVendorTicket(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to create NCM ticket' });
+  }
+};
+
+exports.createNcmCodTransferTicket = async (req, res) => {
+  try {
+    const data = await createVendorCodTransferTicket(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to create NCM COD ticket' });
+  }
+};
+
+exports.closeNcmVendorTicket = async (req, res) => {
+  try {
+    const data = await closeVendorTicket(req.params.ticketId);
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to close NCM ticket' });
+  }
+};
+
+exports.getNcmVendorStaffs = async (req, res) => {
+  try {
+    const data = await fetchVendorStaffs(req.query || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM staffs' });
+  }
+};
+
+exports.markNcmOrderReturn = async (req, res) => {
+  try {
+    const data = await markOrderReturn(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to mark order return' });
+  }
+};
+
+exports.createNcmExchangeOrder = async (req, res) => {
+  try {
+    const data = await createExchangeOrder(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to create exchange order' });
+  }
+};
+
+exports.redirectNcmOrder = async (req, res) => {
+  try {
+    const data = await redirectOrder(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to redirect order' });
+  }
+};
+
+exports.upsertNcmWebhook = async (req, res) => {
+  try {
+    const data = await upsertWebhookUrl(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to update webhook URL' });
+  }
+};
+
+exports.testNcmWebhook = async (req, res) => {
+  try {
+    const data = await testWebhookUrl(req.body || {});
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to test webhook URL' });
+  }
+};
+
+exports.receiveNcmWebhook = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const event = String(body.event || '').trim();
+    const isTestWebhook = isTruthy(body?.test);
+    if (isTestWebhook) {
+      return res.status(200).json({ success: true, message: 'Test webhook received' });
+    }
+
+    const incomingOrderIds = extractWebhookOrderIds(body);
+    const hasBulkOrderIds = incomingOrderIds.length > 1;
+
+    if (!incomingOrderIds.length) {
+      return res.status(400).json({ success: false, message: 'order id missing in webhook payload' });
+    }
+
+    const incomingStatus = extractWebhookStatus(body) || deriveStatusFromEvent(event);
+    const incomingComment = extractWebhookComment(body);
+    const incomingTime = extractWebhookTimestamp(body);
+
+    const update = {
+      ncmLastWebhookEvent: event || 'unknown',
+      ncmLastWebhookAt: new Date(),
+      ncmLastSyncAt: new Date(),
+    };
+
+    if (incomingStatus) {
+      update.ncmLastStatus = incomingStatus;
+      update.ncmLastStatusAt = incomingTime;
+    }
+
+    if (incomingComment) {
+      update.ncmLastComment = incomingComment;
+      update.ncmLastCommentAt = incomingTime;
+    }
+
+    const populateOrder = (query) => {
+      return Orders.findOne(query)
+        .populate('userId')
+        .populate({
+          path: 'products.productId',
+          model: 'Product',
+          populate: {
+            path: 'images',
+            model: 'ProductImage',
+          },
+        });
+    };
+
+    let matchedCount = 0;
+    let notifiedCount = 0;
+
+    for (const rawOrderId of incomingOrderIds) {
+      const normalizedOrderId = String(rawOrderId || '').trim();
+      if (!normalizedOrderId) continue;
+
+      let existingOrder = await populateOrder({ ncmOrderId: normalizedOrderId });
+
+      // Some NCM webhook payloads send only vendor/reference order ids.
+      if (!existingOrder) {
+        existingOrder = await populateOrder({
+          $or: [
+            { ncmVendorRefId: normalizedOrderId },
+            { productOrderId: normalizedOrderId },
+          ],
+        });
+      }
+
+      if (!existingOrder) continue;
+
+      matchedCount += 1;
+
+      const previousStatus = String(existingOrder?.ncmLastStatus || '').trim();
+      const previousNotifiedStatus = String(existingOrder?.ncmLastNotifiedStatus || '').trim();
+      const existingStatusKeys = Array.isArray(existingOrder?.ncmNotifiedStatusKeys)
+        ? existingOrder.ncmNotifiedStatusKeys.map((item) => String(item || '').split('::')[0]).filter(Boolean)
+        : [];
+      const seenStatusKeys = new Set(existingStatusKeys);
+
+      const updatedOrder = await Orders.findByIdAndUpdate(
+        existingOrder._id,
+        update,
+        { new: true }
+      )
+        .populate('userId')
+        .populate({
+          path: 'products.productId',
+          model: 'Product',
+          populate: {
+            path: 'images',
+            model: 'ProductImage',
+          },
+        });
+
+      const statusChanged = normalizeStatusForCompare(incomingStatus) !== normalizeStatusForCompare(previousStatus);
+      const alreadyNotifiedForSameStatus =
+        normalizeStatusForCompare(incomingStatus) === normalizeStatusForCompare(previousNotifiedStatus);
+      const statusKey = buildStatusKey(incomingStatus);
+      const isDuplicateStatusEvent = Boolean(incomingStatus) && seenStatusKeys.has(statusKey);
+
+      if (incomingStatus && statusChanged && !alreadyNotifiedForSameStatus && !isDuplicateStatusEvent && updatedOrder) {
+        try {
+          await sendOrderDeliveryStatusChangedNotification(updatedOrder, {
+            previousStatus,
+            newStatus: incomingStatus,
+            statusTime: update.ncmLastStatusAt || incomingTime || new Date(),
+          });
+
+          seenStatusKeys.add(statusKey);
+
+          await Orders.findByIdAndUpdate(updatedOrder._id, {
+            ncmLastNotifiedStatus: incomingStatus,
+            ncmLastStatusNotifiedAt: update.ncmLastStatusAt || incomingTime || new Date(),
+            ncmNotifiedStatusKeys: Array.from(seenStatusKeys).slice(-200),
+          });
+
+          notifiedCount += 1;
+        } catch (notifyError) {
+          console.error('Failed to send webhook status-change notification email:', notifyError?.message || notifyError);
+        }
+      }
+    }
+
+    if (!matchedCount) {
+      return res.status(202).json({
+        success: true,
+        message: 'Webhook accepted but no matching local order found',
+        totalOrderIds: incomingOrderIds.length,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: hasBulkOrderIds ? 'Bulk webhook processed' : 'Webhook processed',
+      matchedOrders: matchedCount,
+      notificationSent: notifiedCount,
+      totalOrderIds: incomingOrderIds.length,
+      event: event || 'unknown',
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || 'Webhook processing failed' });
+  }
+};
+
+exports.getNcmBranchDetails = async (req, res) => {
+  try {
+    const data = await fetchNcmBranchDetails();
+    return res.status(200).json({ data });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch NCM branch details' });
   }
 };

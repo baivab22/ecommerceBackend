@@ -24,6 +24,8 @@ const ordersRouter = require("./routes/orders.routes");
 const socialItemRouter = require("./routes/socialItem.routes");
 const holidayModeRouter = require("./routes/holidayMode.routes");
 const emailMarketingRoutes = require('./routes/emailMarketingRoutes');
+const { startNcmOrderSchedulers } = require('./schedulers/ncmOrder.scheduler');
+const { startHolidayModeSchedulers } = require('./schedulers/holidayMode.scheduler');
 
 console.log(process.env.PORT, "port number");
 
@@ -93,6 +95,8 @@ app.get("*", (req, res) => {
 });
 app.listen(PORT, () => {
   console.log(`server initialized successfully in port no 8000`);
+  startHolidayModeSchedulers();
+  startNcmOrderSchedulers();
 });
 
 

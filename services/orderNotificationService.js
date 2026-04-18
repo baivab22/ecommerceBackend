@@ -28,10 +28,26 @@ const normalizePhoneNumber = (phoneNumber) => {
   return `+${digitsOnly}`;
 };
 
+const extractSingleEmail = (rawEmail) => {
+  const candidate = String(rawEmail || '')
+    .split(/[;,\s]+/)
+    .map((item) => item.trim())
+    .find(Boolean);
+
+  if (!candidate) return '';
+  const isValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
+  return isValid ? candidate : '';
+};
+
 const sendDeliveryDispatchEmail = async (order) => {
-  const customerEmail = order?.userId?.email;
-  const adminRecipients = EMAIL_CONFIG.adminRecipients;
-  const shouldFallbackToAdminOnly = !customerEmail;
+  const customerEmail = extractSingleEmail(order?.userId?.email);
+  if (!customerEmail) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'Customer email not available',
+    };
+  }
 
   const customerName = order?.userId?.name || "Valued Customer";
   const orderId = order?.productOrderId || order?._id || "N/A";
@@ -97,8 +113,7 @@ const sendDeliveryDispatchEmail = async (order) => {
 
   const mailOptions = {
     from: EMAIL_CONFIG.sender,
-    to: shouldFallbackToAdminOnly ? adminRecipients : customerEmail,
-    ...(shouldFallbackToAdminOnly ? {} : { cc: adminRecipients }),
+    to: customerEmail,
     subject: emailSubject,
     html: buildEmailShell({
       subject: emailSubject,
@@ -117,8 +132,7 @@ const sendDeliveryDispatchEmail = async (order) => {
   return {
     sent: true,
     skipped: false,
-    recipientMode: shouldFallbackToAdminOnly ? "admin-only-fallback" : "customer-and-admin-copy",
-    reason: shouldFallbackToAdminOnly ? "Customer email not available; sent to admin only" : undefined,
+    recipientMode: 'customer-only',
   };
 };
 
@@ -210,6 +224,69 @@ const sendOrderDispatchedNotification = async (order) => {
   return result;
 };
 
+const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = {}) => {
+  const customerEmail = extractSingleEmail(order?.userId?.email);
+  if (!customerEmail) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'Customer email not available',
+    };
+  }
+
+  const previousStatus = String(statusChange?.previousStatus || '').trim() || 'Unknown';
+  const newStatus = String(statusChange?.newStatus || '').trim() || 'Unknown';
+  const statusTime = statusChange?.statusTime ? new Date(statusChange.statusTime) : new Date();
+  const statusTimeLabel = Number.isNaN(statusTime.getTime()) ? new Date().toLocaleString() : statusTime.toLocaleString();
+
+  const customerName = order?.userId?.name || 'Valued Customer';
+  const orderId = order?.productOrderId || order?._id || 'N/A';
+  const ncmOrderId = order?.ncmOrderId || 'N/A';
+  const currentTotal = formatCurrency(order?.totalAmount);
+
+  const emailSubject = `Delivery Update: Order ${orderId} is now ${newStatus}`;
+  const emailBody = `
+    <p>Dear ${customerName},</p>
+    <p>Your delivery status has been updated.</p>
+
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:12px 0;">
+      <p style="margin:4px 0;"><strong>Order Reference:</strong> ${orderId}</p>
+      <p style="margin:4px 0;"><strong>NCM Order ID:</strong> ${ncmOrderId}</p>
+      <p style="margin:4px 0;"><strong>Previous Status:</strong> ${previousStatus}</p>
+      <p style="margin:4px 0;"><strong>Current Status:</strong> ${newStatus}</p>
+      <p style="margin:4px 0;"><strong>Status Time:</strong> ${statusTimeLabel}</p>
+      <p style="margin:4px 0;"><strong>Order Total:</strong> ${currentTotal}</p>
+    </div>
+
+    <p>We will continue to share updates until your package is delivered.</p>
+  `;
+
+  const mailOptions = {
+    from: EMAIL_CONFIG.sender,
+    to: customerEmail,
+    subject: emailSubject,
+    html: buildEmailShell({
+      subject: emailSubject,
+      title: 'Delivery Status Update',
+      subtitle: `Order #${orderId}`,
+      bodyHtml: emailBody,
+      footerNote: 'This is an automated delivery-tracking update.',
+      contactPhone: '9861698400',
+      contactEmail: EMAIL_CONFIG.sender,
+    }),
+    attachments: getLogoAttachment(),
+  };
+
+  await transporter.sendMail(mailOptions);
+
+  return {
+    sent: true,
+    skipped: false,
+    recipientMode: 'customer-only',
+  };
+};
+
 module.exports = {
   sendOrderDispatchedNotification,
+  sendOrderDeliveryStatusChangedNotification,
 };
