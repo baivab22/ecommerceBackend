@@ -4,7 +4,11 @@ const path = require("path");
 
 exports.createBanner = async (req, res, next) => {
   try {
-    console.log("Banner upload - files received:", req.files?.length || 0);
+    const uploadedFiles = Array.isArray(req.files)
+      ? req.files
+      : Object.values(req.files || {}).reduce((acc, files) => acc.concat(files), []);
+
+    console.log("Banner upload - files received:", uploadedFiles.length || 0);
 
     let banner = await Banner.findOne();
 
@@ -12,12 +16,29 @@ exports.createBanner = async (req, res, next) => {
       banner = new Banner();
     }
 
-    // Get image filenames from the uploaded files
-    const fileNames = req.files.map((file) => file.filename);
-    console.log("Filenames:", fileNames);
+    const filesByField = uploadedFiles.reduce((acc, file) => {
+      if (!acc[file.fieldname]) {
+        acc[file.fieldname] = [];
+      }
 
-    // Add image filenames to the banner's bannerImage array
-    banner.bannerImage = [...(banner.bannerImage || []), ...fileNames];
+      acc[file.fieldname].push(file.filename);
+      return acc;
+    }, {});
+
+    const desktopFiles = filesByField.desktopBannerImage || filesByField.bannerImage || [];
+    const mobileFiles = filesByField.mobileBannerImage || [];
+
+    banner.desktopBannerImage = [
+      ...(banner.desktopBannerImage || []),
+      ...desktopFiles,
+    ];
+    banner.mobileBannerImage = [
+      ...(banner.mobileBannerImage || []),
+      ...mobileFiles,
+    ];
+
+    // Keep the legacy field in sync with desktop banners for backward compatibility.
+    banner.bannerImage = [...(banner.bannerImage || []), ...desktopFiles];
 
     // Save the banner
     const savedBanner = await banner.save();
@@ -68,19 +89,29 @@ exports.deleteBannerImage = async (req, res) => {
       return res.status(404).json({ message: "Banner not found" });
     }
 
-    // Remove image from DB
-    const oldImages = banner.bannerImage || [];
-    const newImages = oldImages.filter((img) => img !== safeName);
+    const desktopImages = banner.desktopBannerImage || [];
+    const mobileImages = banner.mobileBannerImage || [];
+    const legacyImages = banner.bannerImage || [];
 
-    if (newImages.length === oldImages.length) {
+    const nextDesktopImages = desktopImages.filter((img) => img !== safeName);
+    const nextMobileImages = mobileImages.filter((img) => img !== safeName);
+    const nextLegacyImages = legacyImages.filter((img) => img !== safeName);
+
+    if (
+      nextDesktopImages.length === desktopImages.length &&
+      nextMobileImages.length === mobileImages.length &&
+      nextLegacyImages.length === legacyImages.length
+    ) {
       return res.status(404).json({ message: "Image not found in banner record" });
     }
 
-    banner.bannerImage = newImages;
+    banner.desktopBannerImage = nextDesktopImages;
+    banner.mobileBannerImage = nextMobileImages;
+    banner.bannerImage = nextLegacyImages;
     const updatedBanner = await banner.save();
 
     // Delete file from uploads/banners folder
-    const filePath = path.join(__dirname, "..", "uploads/banners", safeName);
+    const filePath = path.join(__dirname, "..", "uploads", "banners", safeName);
     try {
       await fs.unlink(filePath);
       console.log("File deleted:", filePath);

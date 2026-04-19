@@ -10,7 +10,11 @@ const bannerUpload = require("../handlers/multerBanner.handler");
 
 const router = express.Router();
 
-const cpUploadBanner = bannerUpload.array("bannerImage", 12);
+const cpUploadBanner = bannerUpload.fields([
+  { name: "desktopBannerImage", maxCount: 12 },
+  { name: "mobileBannerImage", maxCount: 12 },
+  { name: "bannerImage", maxCount: 12 },
+]);
 
 router.post("/banner/new", cpUploadBanner, createBanner);
 router.get("/banner", getAllBanner);
