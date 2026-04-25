@@ -4,7 +4,14 @@ const OrderProductSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
+    required: false,   // allows guest orders with no account
   },
+
+  // Guest checkout fields (only populated when userId is absent)
+  email: { type: String, required: false },
+  fullName: { type: String, required: false },
+  isGuestCheckout: { type: Boolean, default: false },
+
   products: [
     {
       productId: {
@@ -13,8 +20,7 @@ const OrderProductSchema = new mongoose.Schema({
       },
       quantity: Number,
       price: Number,
-      colorName:String,
-
+      colorName: String,
     },
   ],
 

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+    "start": "node index.js",
+    "verify:confirm-bulk": "node scripts/verify-confirm-bulk.js"
   },
   "keywords": [],
   "author": "",

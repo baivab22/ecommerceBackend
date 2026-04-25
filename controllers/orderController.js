@@ -34,19 +34,17 @@ const {
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
 const generateCompactOrderId = () => {
-  const ts = Date.now().toString(36).toUpperCase().slice(-4);
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `ORD-${ts}${rand}`;
+  // Deprecated: not used for new orders, but keep for legacy normalization
+  return Math.floor(10000 + Math.random() * 90000).toString();
 };
 
 const normalizeProductOrderId = (incoming) => {
   const value = String(incoming || '').trim();
-  const isTooLong = value.length > 14;
-  const invalid = !/^ORD-[A-Z0-9]{4,10}$/i.test(value);
-  if (!value || isTooLong || invalid) {
-    return generateCompactOrderId();
+  // Accept only 5-digit numbers
+  if (/^\d{5}$/.test(value)) {
+    return value;
   }
-  return value.toUpperCase();
+  return generateCompactOrderId();
 };
 
 const normalizeOrderPhone = (value) => {
@@ -282,6 +280,165 @@ const buildTrackingSummary = (order, details, statuses, comments) => {
   };
 };
 
+const orderPopulateConfig = [
+  { path: 'userId' },
+  {
+    path: 'products.productId',
+    model: 'Product',
+    populate: {
+      path: 'images',
+      model: 'ProductImage',
+    },
+  },
+];
+
+const populateOrderDoc = (query) => {
+  let chain = query;
+  orderPopulateConfig.forEach((cfg) => {
+    chain = chain.populate(cfg);
+  });
+  return chain;
+};
+
+const findOrderByIdentifier = async (identifier) => {
+  const safe = String(identifier || '').trim();
+  if (!safe) return null;
+  if (mongoose.Types.ObjectId.isValid(safe)) {
+    const byId = await Orders.findById(safe);
+    if (byId) return byId;
+  }
+  return Orders.findOne({ productOrderId: safe });
+};
+
+const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
+
+
+
+  console.log(bodyData,"body data found hai");
+  const existing = await findOrderByIdentifier(orderIdentifier);
+  if (!existing) {
+    return {
+      found: false,
+      updatedOrder: null,
+      ncmSyncMeta: {
+        success: false,
+        skipped: false,
+        ncmOrderId: null,
+        error: 'Order not found',
+      },
+      isConfirmingNow: false,
+    };
+  }
+
+  const confirmRequested = isTruthy(bodyData?.isConfirmed);
+  const isConfirmingNow = confirmRequested && existing.isConfirmed !== true;
+  const patchData = {
+    ...bodyData,
+  };
+
+  if (isConfirmingNow && !patchData.confirmedAt) {
+    patchData.confirmedAt = new Date();
+  }
+
+  let updatedOrder = await populateOrderDoc(
+    Orders.findByIdAndUpdate(existing._id, patchData, { new: true })
+  );
+
+  let ncmSyncMeta = {
+    success: false,
+    skipped: false,
+    ncmOrderId: null,
+    error: null,
+  };
+
+  const shouldSyncNcm =
+    updatedOrder &&
+    (
+      isConfirmingNow ||
+      (updatedOrder.isConfirmed === true && !updatedOrder.ncmOrderId)
+    );
+
+  if (shouldSyncNcm) {
+    if (updatedOrder.ncmOrderId) {
+      await Orders.findByIdAndUpdate(updatedOrder._id, {
+        ncmSyncStatus: 'skipped',
+        ncmSyncError: null,
+      });
+
+      ncmSyncMeta = {
+        success: true,
+        skipped: true,
+        ncmOrderId: updatedOrder.ncmOrderId,
+        error: null,
+      };
+    } else {
+      try {
+        console.log('Creating NCM order for confirmed order', {
+          orderId: String(updatedOrder?._id || ''),
+          productOrderId: String(updatedOrder?.productOrderId || ''),
+        });
+
+        const ncmResult = await createNcmOrder(updatedOrder);
+console.log(ncmResult,"ncm result value");
+        updatedOrder = await populateOrderDoc(
+          Orders.findByIdAndUpdate(
+            updatedOrder._id,
+            {
+              ncmOrderId: ncmResult.ncmOrderId,
+              ncmVendorRefId: updatedOrder.productOrderId || updatedOrder.ncmVendorRefId,
+              ncmPickupCreatedAt: new Date(),
+              ncmSyncStatus: 'success',
+              ncmSyncError: null,
+            },
+            { new: true }
+          )
+        );
+
+        ncmSyncMeta = {
+          success: true,
+          skipped: false,
+          ncmOrderId: ncmResult.ncmOrderId,
+          error: null,
+        };
+      } catch (ncmError) {
+        const ncmErrorMessage = parseNcmError(ncmError);
+
+        await Orders.findByIdAndUpdate(updatedOrder._id, {
+          ncmSyncStatus: 'failed',
+          ncmSyncError: ncmErrorMessage,
+        });
+
+        ncmSyncMeta = {
+          success: false,
+          skipped: false,
+          ncmOrderId: null,
+          error: ncmErrorMessage,
+        };
+
+        console.error('Failed to create NCM pickup order:', ncmErrorMessage);
+      }
+    }
+  }
+
+  if (isConfirmingNow && updatedOrder) {
+    try {
+      const customerConfirmationSent = await sendOrderConfirmationToCustomer(updatedOrder);
+      if (!customerConfirmationSent) {
+        console.error('Customer order confirmation email was not sent for order', updatedOrder?._id);
+      }
+    } catch (emailError) {
+      console.error('Failed to send customer confirmation on admin confirm:', emailError);
+    }
+  }
+
+  return {
+    found: true,
+    updatedOrder,
+    ncmSyncMeta,
+    isConfirmingNow,
+  };
+};
+
 exports.createOrder = async (req, res) => {
   
         console.log(req.body, "create orders error");
@@ -292,7 +449,11 @@ exports.createOrder = async (req, res) => {
     //  console.log(error, "create orders error");
 
   
-    const normalizedProductOrderId = normalizeProductOrderId(req.body?.productOrderId);
+    // Generate a 5-digit numeric order ID
+    const generateShortOrderId = () => {
+      return Math.floor(10000 + Math.random() * 90000).toString();
+    };
+    const shortOrderId = generateShortOrderId();
     const normalizedLocationAddress = String(req.body?.locationAddress || req.body?.shippingLocation || '').trim();
     const normalizedShippingLocation = String(req.body?.shippingLocation || req.body?.locationAddress || '').trim();
     const normalizedPhoneNumber = normalizeOrderPhone(req.body?.phoneNumber);
@@ -307,8 +468,8 @@ exports.createOrder = async (req, res) => {
 
     const newOrderData = new Orders({
       ...req.body,
-      productOrderId: normalizedProductOrderId,
-      ncmVendorRefId: normalizedProductOrderId,
+      productOrderId: shortOrderId,
+      ncmVendorRefId: shortOrderId,
       locationAddress: normalizedLocationAddress,
       shippingLocation: normalizedShippingLocation,
       phoneNumber: normalizedPhoneNumber,
@@ -534,135 +695,13 @@ exports.getOrderedProductList = async (req, res) => {
 };
 
 exports.updateOrderedProduct = async (req, res) => {
-
-
   console.log( req.params.orderId, req.body, "update order data");
   try {
-    const existingOrder = await Orders.findById(req.params.orderId);
+    const existingOrder = await findOrderByIdentifier(req.params.orderId);
     if (!existingOrder) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    const confirmRequested = isTruthy(req.body?.isConfirmed);
-    const isConfirmingNow =
-      confirmRequested && existingOrder.isConfirmed !== true;
-
-    const patchData = {
-      ...req.body,
-    };
-
-    if (isConfirmingNow && !patchData.confirmedAt) {
-      patchData.confirmedAt = new Date();
-    }
-
-    let updatedOrder = await Orders.findByIdAndUpdate(
-      req.params.orderId,
-      patchData,
-      { new: true }
-    )
-      .populate('userId')
-      .populate({
-        path: 'products.productId',
-        model: 'Product',
-        populate: {
-          path: 'images',
-          model: 'ProductImage',
-        },
-      });
-
-    let ncmSyncMeta = {
-      success: false,
-      skipped: false,
-      ncmOrderId: null,
-      error: null,
-    };
-
-    const shouldSyncNcm =
-      updatedOrder &&
-      (
-        isConfirmingNow ||
-        (updatedOrder.isConfirmed === true && !updatedOrder.ncmOrderId)
-      );
-
-    if (shouldSyncNcm) {
-      if (updatedOrder.ncmOrderId) {
-        await Orders.findByIdAndUpdate(updatedOrder._id, {
-          ncmSyncStatus: 'skipped',
-          ncmSyncError: null,
-        });
-
-        ncmSyncMeta = {
-          success: true,
-          skipped: true,
-          ncmOrderId: updatedOrder.ncmOrderId,
-          error: null,
-        };
-      } else {
-        try {
-          console.log('Creating NCM order for confirmed order', {
-            orderId: String(updatedOrder?._id || ''),
-            productOrderId: String(updatedOrder?.productOrderId || ''),
-          });
-
-          const ncmResult = await createNcmOrder(updatedOrder);
-
-          updatedOrder = await Orders.findByIdAndUpdate(
-            updatedOrder._id,
-            {
-              ncmOrderId: ncmResult.ncmOrderId,
-              ncmVendorRefId: updatedOrder.productOrderId || updatedOrder.ncmVendorRefId,
-              ncmPickupCreatedAt: new Date(),
-              ncmSyncStatus: 'success',
-              ncmSyncError: null,
-            },
-            { new: true }
-          )
-            .populate('userId')
-            .populate({
-              path: 'products.productId',
-              model: 'Product',
-              populate: {
-                path: 'images',
-                model: 'ProductImage',
-              },
-            });
-
-          ncmSyncMeta = {
-            success: true,
-            skipped: false,
-            ncmOrderId: ncmResult.ncmOrderId,
-            error: null,
-          };
-        } catch (ncmError) {
-          const ncmErrorMessage = parseNcmError(ncmError);
-
-          await Orders.findByIdAndUpdate(updatedOrder._id, {
-            ncmSyncStatus: 'failed',
-            ncmSyncError: ncmErrorMessage,
-          });
-
-          ncmSyncMeta = {
-            success: false,
-            skipped: false,
-            ncmOrderId: null,
-            error: ncmErrorMessage,
-          };
-
-          console.error('Failed to create NCM pickup order:', ncmErrorMessage);
-        }
-      }
-    }
-
-    if (isConfirmingNow && updatedOrder) {
-      try {
-        const customerConfirmationSent = await sendOrderConfirmationToCustomer(updatedOrder);
-        if (!customerConfirmationSent) {
-          console.error('Customer order confirmation email was not sent for order', updatedOrder?._id);
-        }
-      } catch (emailError) {
-        console.error('Failed to send customer confirmation on admin confirm:', emailError);
-      }
-    }
+    const { updatedOrder, ncmSyncMeta } = await confirmOrderAndSync(req.params.orderId, req.body);
 
     res
       .status(201)
@@ -673,6 +712,71 @@ exports.updateOrderedProduct = async (req, res) => {
       });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+exports.confirmOrdersBulk = async (req, res) => {
+  try {
+    const rawOrderIds = Array.isArray(req.body?.orderIds) ? req.body.orderIds : [];
+    const normalizedOrderIds = [...new Set(
+      rawOrderIds
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    )];
+
+    if (normalizedOrderIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'orderIds is required and must be a non-empty array',
+      });
+    }
+
+    const results = [];
+
+    for (const orderId of normalizedOrderIds) {
+      const { found, updatedOrder, ncmSyncMeta } = await confirmOrderAndSync(orderId, {
+        isConfirmed: true,
+        confirmedAt: new Date(),
+      });
+
+      if (!found) {
+        results.push({
+          orderId,
+          inputIdentifier: orderId,
+          success: false,
+          error: 'Order not found',
+          ncm: ncmSyncMeta,
+        });
+        continue;
+      }
+
+      results.push({
+        orderId: String(updatedOrder?._id || orderId),
+        inputIdentifier: orderId,
+        productOrderId: updatedOrder?.productOrderId || null,
+        success: true,
+        isConfirmed: updatedOrder?.isConfirmed === true,
+        ncm: ncmSyncMeta,
+      });
+    }
+
+    const successCount = results.filter((item) => item.success).length;
+    const failureCount = results.length - successCount;
+
+    return res.status(failureCount > 0 ? 207 : 200).json({
+      success: failureCount === 0,
+      message: failureCount > 0
+        ? `Partially confirmed: ${successCount} succeeded, ${failureCount} failed`
+        : `Successfully confirmed ${successCount} order(s)`,
+      results,
+      summary: {
+        total: results.length,
+        successful: successCount,
+        failed: failureCount,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || 'Bulk confirmation failed' });
   }
 };
 
@@ -854,6 +958,9 @@ exports.getNcmOrderStatus = async (req, res) => {
   try {
     const orderId = req.query.orderId || req.params.orderId;
     const data = await fetchNcmOrderStatus(orderId);
+
+
+    console.log(data,"ncm order status data");
     return res.status(200).json({ data });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'Failed to fetch NCM order status' });

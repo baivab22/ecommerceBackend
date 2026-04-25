@@ -220,10 +220,13 @@ const createNcmOrder = async (order) => {
       headers: getNcmHeaders(token),
       timeout: 15000,
     });
+
+
+
   } catch (error) {
     throw new Error(parseNcmError(error));
   }
-
+console.log("responsesss",response);
   const ncmOrderId = response?.data?.orderid;
   if (!ncmOrderId) {
     throw new Error(`NCM order creation did not return orderid. Response: ${JSON.stringify(response?.data || {})}`);
@@ -260,6 +263,8 @@ const fetchNcmLastBulkComments = async () => {
 };
 
 const fetchNcmOrderStatus = async (orderId) => {
+
+  
   const id = validateOrderIdParam(orderId);
   return ncmGet('/api/v1/order/status', { id });
 };

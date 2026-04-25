@@ -27,6 +27,7 @@ const {
   testNcmWebhook,
   receiveNcmWebhook,
   syncOrderToNcm,
+  confirmOrdersBulk,
   sendInvoiceEmail
 } = require("../controllers/orderController");
 
@@ -57,6 +58,7 @@ router.post('/order/ncm/webhook', upsertNcmWebhook);
 router.post('/order/ncm/webhook/test', testNcmWebhook);
 router.post('/order/ncm/webhook/callback', receiveNcmWebhook);
 router.post('/order/:orderId/ncm-sync', syncOrderToNcm);
+router.post('/order/confirm-bulk', confirmOrdersBulk);
 router.patch("/order/:orderId", updateOrderedProduct);
 router.delete("/order/:orderId", deleteSpecificCartOrder);
 // router.post('/send-invoice', sendInvoiceEmail);

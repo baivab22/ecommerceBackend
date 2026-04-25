@@ -79,14 +79,13 @@ const markOrderAsScanned = async (req, res) => {
             );
           }
         }
-
         results.successful.push({
           orderId: order.productOrderId,
           order: order
         });
 
         // Send customer notifications after successful scan confirmation.
-        const notificationStatus = await sendOrderDispatchedNotification(order);
+        // const notificationStatus = await sendOrderDispatchedNotification(order);
         results.notifications.push({
           orderId: order.productOrderId,
           email: notificationStatus.email,
