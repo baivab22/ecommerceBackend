@@ -314,7 +314,7 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
 
 
 
-  console.log(bodyData,"body data found hai");
+
   const existing = await findOrderByIdentifier(orderIdentifier);
   if (!existing) {
     return {
@@ -332,6 +332,10 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
 
   const confirmRequested = isTruthy(bodyData?.isConfirmed);
   const isConfirmingNow = confirmRequested && existing.isConfirmed !== true;
+
+
+
+
   const patchData = {
     ...bodyData,
   };
