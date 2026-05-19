@@ -32,24 +32,49 @@ const storageVideo = multer.diskStorage({
   },
 });
 
+const isAllowedImage = (mimetype) =>
+  /^image\/(png|jpe?g|gif|webp|jfif|pjpeg|x-png)$/i.test(mimetype || "");
+
+const isAllowedVideo = (mimetype) =>
+  /^video\/(mp4|webm|quicktime|x-msvideo)$/i.test(mimetype || "");
+
 const productUpload = multer({
   storage: storageProducts,
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype.match(/mp4|png|gif|jpg|jpeg|jfif/)) {
-      cb(new Error("file is not supported"), false);
+    if (!isAllowedImage(file.mimetype) && !isAllowedVideo(file.mimetype)) {
+      return cb(
+        new Error(`File type not supported: ${file.mimetype || "unknown"}`),
+        false
+      );
     }
-    cb(null, true);
+    return cb(null, true);
   },
 });
 
 const videoUpload = multer({
   storage: storageVideo,
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype.match(/mp4/)) {
-      cb(new Error("file is not supported"), false);
+    if (!isAllowedVideo(file.mimetype)) {
+      return cb(
+        new Error(`Video type not supported: ${file.mimetype || "unknown"}`),
+        false
+      );
     }
-    cb(null, true);
+    return cb(null, true);
   },
 });
 
-module.exports = { productUpload, videoUpload };
+const variantUpload = multer({
+  storage: storageProducts,
+  fileFilter: (req, file, cb) => {
+    if (!isAllowedImage(file.mimetype)) {
+      return cb(
+        new Error(`Image type not supported: ${file.mimetype || "unknown"}`),
+        false
+      );
+    }
+    return cb(null, true);
+  },
+});
+
+module.exports = { productUpload, videoUpload, variantUpload };

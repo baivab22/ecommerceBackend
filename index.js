@@ -2,6 +2,7 @@
 process.env.UNDICI_WASM = '0';
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 require("dotenv").config();
 require("./db");
 
@@ -35,6 +36,26 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
 const uploadsDir = path.join(__dirname, "uploads");
+const uploadsVideoDir = path.join(uploadsDir, "video");
+const uploadsProductsDir = path.join(uploadsDir, "products");
+
+// Legacy: some videos were saved under uploads/products — serve from video URL too
+app.use("/uploads/video", (req, res, next) => {
+  const fileName = path.basename(req.path);
+  if (!fileName) return next();
+
+  const videoPath = path.join(uploadsVideoDir, fileName);
+  const legacyProductsPath = path.join(uploadsProductsDir, fileName);
+
+  if (fs.existsSync(videoPath)) {
+    return res.sendFile(videoPath);
+  }
+  if (fs.existsSync(legacyProductsPath)) {
+    return res.sendFile(legacyProductsPath);
+  }
+  return res.status(404).send("Video not found");
+});
+
 app.use("/uploads", express.static(uploadsDir));
 
 // Backward compatibility: keep old root-level asset links working.

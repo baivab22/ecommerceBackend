@@ -70,9 +70,12 @@ const productSchema = new mongoose.Schema(
       type: Number,
     },
     
-    images: [{ 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "ProductImage" 
+    images: [{
+      colorName: String,
+      coloredImage: {
+        type: String,
+        required: true,
+      }
     }],
     
     category: {
