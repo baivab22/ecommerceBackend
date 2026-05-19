@@ -74,51 +74,55 @@ if (!fs.existsSync(uploadDirVideo)) {
   fs.mkdirSync(uploadDirVideo, { recursive: true });
 }
 
-// Route video uploads to uploads/video and images to uploads/products
-const storageMixed = multer.diskStorage({
-  destination: function (req, file, cb) {
-    if (file.fieldname === "video") {
-      cb(null, uploadDirVideo);
-    } else {
-      cb(null, uploadDirProducts);
-    }
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
-
 const isAllowedImage = (mimetype) =>
   /^image\/(png|jpe?g|gif|webp|jfif|pjpeg|x-png)$/i.test(mimetype || "");
 
 const isAllowedVideo = (mimetype) =>
   /^video\/(mp4|webm|quicktime|x-msvideo)$/i.test(mimetype || "");
 
+const resolveUploadDestination = (file) => {
+  if (isAllowedVideo(file.mimetype)) {
+    return uploadDirVideo;
+  }
+
+  if (isAllowedImage(file.mimetype)) {
+    return uploadDirProducts;
+  }
+
+  return null;
+};
+
+// Route video uploads to uploads/video and images to uploads/products
+const storageMixed = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const destination = resolveUploadDestination(file);
+    if (!destination) {
+      return cb(
+        new Error(`Unsupported upload type: ${file.mimetype || "unknown"}`)
+      );
+    }
+
+    cb(null, destination);
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "-" + file.originalname);
+  },
+});
+
 // ✅ Create multer instances
 const uploadProducts = multer({
   storage: storageMixed,
   fileFilter: (req, file, cb) => {
-    if (file.fieldname === "video") {
-      if (!isAllowedVideo(file.mimetype)) {
-        return cb(
-          new Error(`Video type not supported: ${file.mimetype || "unknown"}`),
-          false
-        );
-      }
+    if (isAllowedVideo(file.mimetype) || isAllowedImage(file.mimetype)) {
       return cb(null, true);
     }
 
-    if (file.fieldname === "coloredImage") {
-      if (!isAllowedImage(file.mimetype)) {
-        return cb(
-          new Error(`Image type not supported: ${file.mimetype || "unknown"}`),
-          false
-        );
-      }
-      return cb(null, true);
-    }
-
-    return cb(new Error(`Unexpected upload field: ${file.fieldname}`), false);
+    return cb(
+      new Error(
+        `Unsupported upload type for field ${file.fieldname}: ${file.mimetype || "unknown"}`
+      ),
+      false
+    );
   },
 });
 
@@ -136,14 +140,9 @@ const uploadVariant = multer({
 });
 
 // ✅ Configure field handlers for different endpoints
-const cpUploadProductVideo = uploadProducts.fields([
-  { name: "video", maxCount: 1 },
-  { name: "coloredImage", maxCount: 50 },
-]);
+const cpUploadProductVideo = uploadProducts.any();
 
-const cpUploadVariant = uploadVariant.fields([
-  { name: "coloredImage", maxCount: 50 },
-]);
+const cpUploadVariant = uploadVariant.any();
 
 const {
   getAllProduct,

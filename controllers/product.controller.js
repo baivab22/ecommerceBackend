@@ -2,6 +2,24 @@ const { Product, ProductImage } = require("../modals/product.modal");
 const fs = require("fs");
 const path = require("path");
 
+const getUploadedFiles = (files, fieldName) => {
+  if (!files) return [];
+  if (Array.isArray(files)) {
+    return files.filter((file) => {
+      if (fieldName === "video") {
+        return /^video\//i.test(file.mimetype || "") || file.fieldname === fieldName;
+      }
+
+      if (fieldName === "coloredImage") {
+        return /^image\//i.test(file.mimetype || "") || file.fieldname === fieldName;
+      }
+
+      return file.fieldname === fieldName;
+    });
+  }
+  return Array.isArray(files[fieldName]) ? files[fieldName] : [];
+};
+
 const parseBodyArray = (value) => {
   if (value === undefined || value === null || value === "") return [];
   return Array.isArray(value) ? value : [value];
@@ -55,8 +73,8 @@ exports.createProduct = async (req, res, next) => {
     try {
       // ✅ Process uploaded color images if provided
       // Support unlimited images by allowing multiple batch uploads if needed
-      if (req.files && req.files.coloredImage && req.files.coloredImage.length > 0) {
-        const colorImages = req.files.coloredImage;
+      const colorImages = getUploadedFiles(req.files, "coloredImage");
+      if (colorImages.length > 0) {
         
         // Get color names - handle multiple formats
         let colorNames = [];
@@ -85,8 +103,9 @@ exports.createProduct = async (req, res, next) => {
 
       // Get video if provided
       let videoFilename = null;
-      if (req.files && req.files.video && req.files.video.length > 0) {
-        const uploadedVideo = req.files.video[0];
+      const uploadedVideos = getUploadedFiles(req.files, "video");
+      if (uploadedVideos.length > 0) {
+        const uploadedVideo = uploadedVideos[0];
         if (!uploadedVideo.size) {
           return res.status(400).json({ error: "Uploaded video file is empty" });
         }
@@ -140,8 +159,9 @@ exports.createProduct = async (req, res, next) => {
     } catch (createError) {
       // ✅ CLEANUP: Delete any uploaded image files if product creation fails
       console.error("Error during product creation, cleaning up files:", createError);
-      if (req.files && req.files.coloredImage) {
-        for (const file of req.files.coloredImage) {
+      const uploadedColorImages = getUploadedFiles(req.files, "coloredImage");
+      if (uploadedColorImages.length > 0) {
+        for (const file of uploadedColorImages) {
           try {
             const filePath = path.join(__dirname, "../uploads/products", file.filename);
             deleteFileSync(filePath);
@@ -150,9 +170,10 @@ exports.createProduct = async (req, res, next) => {
           }
         }
       }
-      if (req.files && req.files.video && req.files.video[0]) {
+      const uploadedVideos = getUploadedFiles(req.files, "video");
+      if (uploadedVideos[0]) {
         try {
-          const { primary, legacy } = getVideoFilePaths(req.files.video[0].filename);
+          const { primary, legacy } = getVideoFilePaths(uploadedVideos[0].filename);
           deleteFileSync(primary);
           deleteFileSync(legacy);
         } catch (err) {
@@ -655,8 +676,7 @@ exports.updateProduct = async (req, res, next) => {
             : JSON.stringify(variantsMetaRaw)
         );
         if (Array.isArray(meta) && meta.length > 0) {
-          const newFiles =
-            req.files && req.files.coloredImage ? req.files.coloredImage : [];
+          const newFiles = getUploadedFiles(req.files, "coloredImage");
           let fileIdx = 0;
           const rebuilt = [];
 
@@ -708,8 +728,9 @@ exports.updateProduct = async (req, res, next) => {
       } catch (parseError) {
         return res.status(400).json({ error: "Invalid variantsMeta payload" });
       }
-    } else if (req.files && req.files.coloredImage && req.files.coloredImage.length > 0) {
-      const colorImages = req.files.coloredImage;
+    } else {
+      const colorImages = getUploadedFiles(req.files, "coloredImage");
+      if (colorImages.length > 0) {
       
       // Get color names - handle multiple formats
       let colorNames = [];
@@ -768,27 +789,29 @@ exports.updateProduct = async (req, res, next) => {
         }
         throw imageError;
       }
-    } else {
-      // ✅ Color-only update: no new files, but colorName values were sent
-      const colorNames = parseColorNames(req.body);
-      if (colorNames.length > 0 && images.length > 0) {
-        images = images.map((img, index) => ({
-          colorName:
-            colorNames[index] !== undefined && colorNames[index] !== ""
-              ? colorNames[index]
-              : img.colorName,
-          coloredImage: img.coloredImage,
-        }));
-        console.log(
-          `✅ Updated ${Math.min(colorNames.length, images.length)} variant color(s) without new files`
-        );
+      } else {
+        // ✅ Color-only update: no new files, but colorName values were sent
+        const colorNames = parseColorNames(req.body);
+        if (colorNames.length > 0 && images.length > 0) {
+          images = images.map((img, index) => ({
+            colorName:
+              colorNames[index] !== undefined && colorNames[index] !== ""
+                ? colorNames[index]
+                : img.colorName,
+            coloredImage: img.coloredImage,
+          }));
+          console.log(
+            `✅ Updated ${Math.min(colorNames.length, images.length)} variant color(s) without new files`
+          );
+        }
       }
     }
 
     // Get video if provided, otherwise keep existing
     let videoFilename = product.video;
-    if (req.files && req.files.video && req.files.video.length > 0) {
-      const uploadedVideo = req.files.video[0];
+    const uploadedVideos = getUploadedFiles(req.files, "video");
+    if (uploadedVideos.length > 0) {
+      const uploadedVideo = uploadedVideos[0];
       if (!uploadedVideo.size) {
         return res.status(400).json({ error: "Uploaded video file is empty" });
       }
@@ -924,7 +947,8 @@ exports.CreateProductImage = async (req, res, next) => {
     }
 
     // ✅ VALIDATION: Check if files exist
-    if (!req.files || !Array.isArray(req.files.coloredImage) || req.files.coloredImage.length === 0) {
+    const colorImages = getUploadedFiles(req.files, "coloredImage");
+    if (colorImages.length === 0) {
       return res.status(400).json({ error: "No image files provided" });
     }
 
@@ -932,8 +956,8 @@ exports.CreateProductImage = async (req, res, next) => {
     const product = await Product.findById(productId);
     if (!product) {
       // Clean up uploaded files on error
-      if (req.files && req.files.coloredImage) {
-        for (const file of req.files.coloredImage) {
+      if (colorImages.length > 0) {
+        for (const file of colorImages) {
           try {
             const filePath = path.join(__dirname, "../uploads/products", file.filename);
             deleteFileSync(filePath);
@@ -945,7 +969,6 @@ exports.CreateProductImage = async (req, res, next) => {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    const colorImages = req.files.coloredImage;
     console.log(`Processing ${colorImages.length} image(s) for product ${productId}...`);
 
     // ✅ VALIDATION: Check if colorNames are provided
