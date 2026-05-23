@@ -457,6 +457,9 @@ exports.createOrder = async (req, res) => {
     const generateShortOrderId = () => {
       return Math.floor(10000 + Math.random() * 90000).toString();
     };
+
+
+
     const shortOrderId = generateShortOrderId();
     const normalizedLocationAddress = String(req.body?.locationAddress || req.body?.shippingLocation || '').trim();
     const normalizedShippingLocation = String(req.body?.shippingLocation || req.body?.locationAddress || '').trim();
@@ -559,6 +562,7 @@ exports.createOrder = async (req, res) => {
       console.error('Failed to send order notification emails:', adminEmailError);
     }
 
+    console.log(createOrderedData, "created order data");
     res.status(201).json({
       data: createOrderedData,
       success: "Successfully Created Orders",
