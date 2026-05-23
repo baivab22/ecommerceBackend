@@ -51,6 +51,12 @@ const productSchema = new mongoose.Schema(
       type: Boolean,
       required: false,
     },
+
+    showInHomePage: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
     
     isHotSelling: { 
       type: Boolean, 

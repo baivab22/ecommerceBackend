@@ -145,6 +145,7 @@ exports.createProduct = async (req, res, next) => {
         isNewArrivals: req.body.isNewArrivals === 'true' || req.body.isNewArrivals === true,
         isBestSelling: req.body.isBestSelling === 'true' || req.body.isBestSelling === true,
         isWatchAndShop: req.body.isWatchAndShop === 'true' || req.body.isWatchAndShop === true,
+        showInHomePage: req.body.showInHomePage === 'true' || req.body.showInHomePage === true,
         isHotSelling: req.body.isHotSelling === 'true' || req.body.isHotSelling === true,
       });
 
@@ -404,6 +405,7 @@ exports.getAllProduct = async (req, res, next) => {
     isNewArrivals,
     isBestSelling,
     isWatchAndShop,
+    showInHomePage,
     page = 1,
     limit = 12,
   } = req.query;
@@ -431,6 +433,9 @@ exports.getAllProduct = async (req, res, next) => {
     }
     if (isWatchAndShop === 'true') {
       query.isWatchAndShop = true;
+    }
+    if (showInHomePage === 'true') {
+      query.showInHomePage = true;
     }
 
     // Handle category filtering with hierarchical priority
@@ -982,6 +987,10 @@ exports.updateProduct = async (req, res, next) => {
       req.body.isWatchAndShop !== undefined
         ? req.body.isWatchAndShop === "true" || req.body.isWatchAndShop === true
         : product.isWatchAndShop;
+    product.showInHomePage =
+      req.body.showInHomePage !== undefined
+        ? req.body.showInHomePage === "true" || req.body.showInHomePage === true
+        : product.showInHomePage;
     product.isHotSelling =
       req.body.isHotSelling !== undefined
         ? req.body.isHotSelling === "true" || req.body.isHotSelling === true
