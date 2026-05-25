@@ -6,6 +6,7 @@ const {
   sendCompleteOutOfStockReport,
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
+  sendNcmPickupNotificationToCustomer,
 } = require("../services/emailServices");
 const { sendOrderDeliveryStatusChangedNotification } = require('../services/orderNotificationService');
 const {
@@ -32,6 +33,14 @@ const {
 } = require('../services/ncmService');
 
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
+const isOutsideValleyOrder = (order) => {
+  const rawValue = order?.isInsideValley;
+  if (rawValue === false) return true;
+
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  return normalized === 'false' || normalized === '0';
+};
 
 const generateCompactOrderId = () => {
   // Deprecated: not used for new orders, but keep for legacy normalization
@@ -355,14 +364,37 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
     error: null,
   };
 
-  const shouldSyncNcm =
+  const shouldIntegrateNcm = isOutsideValleyOrder(updatedOrder);
+
+  const shouldSkipNcm =
     updatedOrder &&
+    !shouldIntegrateNcm &&
     (
       isConfirmingNow ||
       (updatedOrder.isConfirmed === true && !updatedOrder.ncmOrderId)
     );
 
-  if (shouldSyncNcm) {
+  const shouldSyncNcm =
+    updatedOrder &&
+    shouldIntegrateNcm &&
+    (
+      isConfirmingNow ||
+      (updatedOrder.isConfirmed === true && !updatedOrder.ncmOrderId)
+    );
+  if (shouldSkipNcm) {
+    await Orders.findByIdAndUpdate(updatedOrder._id, {
+      ncmSyncStatus: 'skipped',
+      ncmSyncError: null,
+    });
+
+    ncmSyncMeta = {
+      success: false,
+      skipped: true,
+      ncmOrderId: null,
+      error: null,
+      reason: 'not_outside_valley',
+    };
+  } else if (shouldSyncNcm) {
     if (updatedOrder.ncmOrderId) {
       await Orders.findByIdAndUpdate(updatedOrder._id, {
         ncmSyncStatus: 'skipped',
@@ -383,7 +415,7 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
         });
 
         const ncmResult = await createNcmOrder(updatedOrder);
-console.log(ncmResult,"ncm result value");
+        console.log(ncmResult, 'ncm result value');
         updatedOrder = await populateOrderDoc(
           Orders.findByIdAndUpdate(
             updatedOrder._id,
@@ -432,6 +464,18 @@ console.log(ncmResult,"ncm result value");
       }
     } catch (emailError) {
       console.error('Failed to send customer confirmation on admin confirm:', emailError);
+    }
+
+    // Send pickup notification only for outside-valley orders that created NCM records.
+    try {
+      if (shouldIntegrateNcm && ncmSyncMeta && ncmSyncMeta.success === true) {
+        const ncmEmailSent = await sendNcmPickupNotificationToCustomer(updatedOrder, ncmSyncMeta);
+        if (!ncmEmailSent) {
+          console.error('Failed to send NCM pickup email to customer for order', updatedOrder?._id);
+        }
+      }
+    } catch (ncmEmailError) {
+      console.error('Error sending NCM pickup email to customer:', ncmEmailError);
     }
   }
 
@@ -1013,6 +1057,20 @@ exports.syncOrderToNcm = async (req, res) => {
         skipped: true,
         ncmOrderId: order.ncmOrderId,
         message: 'Order already synced with NCM',
+      });
+    }
+
+    // Only outside-valley orders should sync to NCM.
+    if (!isOutsideValleyOrder(order)) {
+      await Orders.findByIdAndUpdate(order._id, {
+        ncmSyncStatus: 'skipped',
+        ncmSyncError: null,
+      });
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        ncmOrderId: null,
+        message: 'Order is not marked as outside valley — NCM sync not required',
       });
     }
 

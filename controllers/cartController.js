@@ -1,7 +1,31 @@
 const Cart = require("../modals/cart.modal"); 
+const { Product } = require("../modals/product.modal");
+
+const getRequestedQuantity = (value) => Math.max(1, Number(value || 1));
+
+const getAvailableStock = async (productId) => {
+  const product = await Product.findById(productId).select('stockQuantity');
+  return Number(product?.stockQuantity || 0);
+};
 
 exports.createCart = async (req, res) => {
   try {
+    const requestedProducts = Array.isArray(req.body?.products) ? req.body.products : [];
+    for (const item of requestedProducts) {
+      const productId = item?.productId;
+      if (!productId) {
+        return res.status(400).json({ message: 'productId is required for cart items' });
+      }
+
+      const quantity = getRequestedQuantity(item?.quantity);
+      const stockQuantity = await getAvailableStock(productId);
+      if (quantity > stockQuantity) {
+        return res.status(400).json({
+          message: `Only ${stockQuantity} items available in stock`,
+        });
+      }
+    }
+
     const existingCart = await Cart.findOne({ userId: req.body.userId });
 
     if (existingCart) {
@@ -61,8 +85,17 @@ exports.updateCartProduct = async (req, res) => {
         (item) => item.productId == productId
       );
       if (productToUpdate) {
+        const stockQuantity = await getAvailableStock(productId);
+        const requestedQuantity = getRequestedQuantity(quantity);
+
+        if (requestedQuantity > stockQuantity) {
+          return res.status(400).json({
+            message: `Only ${stockQuantity} items available in stock`,
+          });
+        }
+
         console.log("else if", quantity, price);
-        productToUpdate.quantity = quantity;
+        productToUpdate.quantity = requestedQuantity;
         productToUpdate.price = price;
         const updatedCart = await cart.save();
 
