@@ -392,6 +392,129 @@ exports.createProduct = async (req, res, next) => {
 //     res.status(500).json({ error: "Error fetching products" });
 //   }
 // };
+// exports.getAllProduct = async (req, res, next) => {
+//   const {
+//     search,
+//     sort,
+//     order,
+//     minPrice,
+//     maxPrice,
+//     categoryId,
+//     subCategoryId,
+//     nestedSubCategoryId,
+//     isNewArrivals,
+//     isBestSelling,
+//     isWatchAndShop,
+//     showInHomePage,
+//     page = 1,
+//     limit = 12,
+//   } = req.query;
+  
+//   try {
+//     let query = {};
+    
+//     // Advanced search: trim, collapse whitespace, match name/description, fuzzy/partial
+//     if (search && typeof search === 'string' && search.trim()) {
+//       // Clean up search string
+//       const cleaned = search.trim().replace(/\s+/g, ' ');
+//       // Fuzzy regex: allow partial matches, ignore case, match anywhere in name or description
+//       const regex = new RegExp(cleaned.split(' ').join('.*'), 'i');
+//       query.$or = [
+//         { name: { $regex: regex } },
+//         { description: { $regex: regex } }
+//       ];
+//     }
+
+//     if (isBestSelling === 'true') {
+//       query.isBestSelling = true;
+//     }
+//     if (isNewArrivals === 'true') {
+//       query.isNewArrivals = true;
+//     }
+//     if (isWatchAndShop === 'true') {
+//       query.isWatchAndShop = true;
+//     }
+//     if (showInHomePage === 'true') {
+//       query.showInHomePage = true;
+//     }
+
+//     // Handle category filtering with hierarchical priority
+//     // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
+//     // Only filter by the most specific category level provided
+//     if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
+//       // Nested subcategory has highest priority - only filter by this
+//       query.nestedSubCategory = nestedSubCategoryId;
+//     } else if (subCategoryId && subCategoryId.trim() !== "") {
+//       // Subcategory has medium priority - only filter by this if no nested subcategory
+//       query.subCategory = subCategoryId;
+//     } else if (categoryId && categoryId.trim() !== "") {
+//       // Category has lowest priority - only filter by this if no subcategories provided
+//       query.category = categoryId;
+//     }
+
+//     // Price filtering - using discountedPrice
+//     if (minPrice || maxPrice) {
+//       query.discountedPrice = {};
+//       if (minPrice) {
+//         query.discountedPrice.$gte = parseInt(minPrice);
+//       }
+//       if (maxPrice) {
+//         query.discountedPrice.$lte = parseInt(maxPrice);
+//       }
+//     }
+
+//     // Sort products - FIXED to use discountedPrice
+//     let sortOption = {};
+//     if (sort === "discountedPrice") {
+//       // Sort by discounted price (the actual selling price)
+//       sortOption.discountedPrice = order === "asc" ? 1 : -1;
+//     } else if (sort === "name") {
+//       sortOption.name = order === "asc" ? 1 : -1;
+//     } else {
+//       // Default sort: latest created items first (newest to oldest)
+//       sortOption.createdAt = -1;
+//     }
+
+//     // Pagination
+//     const pageNum = parseInt(page);
+//     const limitNum = parseInt(limit);
+//     const skip = (pageNum - 1) * limitNum;
+
+//     // Get total count for pagination info
+//     const totalProducts = await Product.countDocuments(query);
+
+//     // Fetch products with pagination
+//     const products = await Product.find(query)
+//       .populate("category")
+//       .populate("subCategory")
+//       .populate("nestedSubCategory")
+//       .sort(sortOption)
+//       .skip(skip)
+//       .limit(limitNum);
+
+//     // Calculate pagination info
+//     const totalPages = Math.ceil(totalProducts / limitNum);
+    
+//     res.status(200).json({ 
+//       message: "Successfully retrieved products", 
+//       data: products,
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: totalPages,
+//         totalProducts: totalProducts,
+//         hasNextPage: pageNum < totalPages,
+//         hasPrevPage: pageNum > 1,
+//         limit: limitNum
+//       }
+//     });
+    
+//   } catch (err) {
+//     console.error("Error fetching products:", err);
+//     res.status(500).json({ error: "Error fetching products" });
+//   }
+// };
+
+
 exports.getAllProduct = async (req, res, next) => {
   const {
     search,
@@ -439,16 +562,11 @@ exports.getAllProduct = async (req, res, next) => {
     }
 
     // Handle category filtering with hierarchical priority
-    // Priority: nestedSubCategoryId (highest) > subCategoryId > categoryId (lowest)
-    // Only filter by the most specific category level provided
     if (nestedSubCategoryId && nestedSubCategoryId.trim() !== "") {
-      // Nested subcategory has highest priority - only filter by this
       query.nestedSubCategory = nestedSubCategoryId;
     } else if (subCategoryId && subCategoryId.trim() !== "") {
-      // Subcategory has medium priority - only filter by this if no nested subcategory
       query.subCategory = subCategoryId;
     } else if (categoryId && categoryId.trim() !== "") {
-      // Category has lowest priority - only filter by this if no subcategories provided
       query.category = categoryId;
     }
 
@@ -463,15 +581,15 @@ exports.getAllProduct = async (req, res, next) => {
       }
     }
 
-    // Sort products - FIXED to use discountedPrice
+    // Sort products - FIXED for name sorting
     let sortOption = {};
     if (sort === "discountedPrice") {
-      // Sort by discounted price (the actual selling price)
       sortOption.discountedPrice = order === "asc" ? 1 : -1;
     } else if (sort === "name") {
+      // Use collation for case-insensitive sorting
+      // This ensures A to Z and Z to A work correctly regardless of case
       sortOption.name = order === "asc" ? 1 : -1;
     } else {
-      // Default sort: latest created items first (newest to oldest)
       sortOption.createdAt = -1;
     }
 
@@ -483,11 +601,19 @@ exports.getAllProduct = async (req, res, next) => {
     // Get total count for pagination info
     const totalProducts = await Product.countDocuments(query);
 
-    // Fetch products with pagination
-    const products = await Product.find(query)
+    // Build the query with proper collation for string sorting
+    let productsQuery = Product.find(query)
       .populate("category")
       .populate("subCategory")
-      .populate("nestedSubCategory")
+      .populate("nestedSubCategory");
+    
+    // Apply collation only for name sorting to ensure case-insensitive sorting
+    if (sort === "name") {
+      productsQuery = productsQuery.collation({ locale: 'en', strength: 2 });
+    }
+    
+    // Apply sorting and pagination
+    const products = await productsQuery
       .sort(sortOption)
       .skip(skip)
       .limit(limitNum);
@@ -513,7 +639,6 @@ exports.getAllProduct = async (req, res, next) => {
     res.status(500).json({ error: "Error fetching products" });
   }
 };
-
 
 // exports.getAllProduct = async (req, res, next) => {
 //   const {
