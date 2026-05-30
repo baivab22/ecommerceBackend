@@ -32,15 +32,90 @@ const parseColorNames = (body) => {
   return names.map((name) => String(name).trim()).filter(Boolean);
 };
 
+const groupUploadedColorFilesByColorName = (body, colorImages) => {
+  const colorNames = parseColorNames(body);
+  const grouped = {};
+
+  for (let index = 0; index < colorImages.length; index++) {
+    const filename = colorImages[index].filename;
+    const colorName = (colorNames[index] && String(colorNames[index]).trim()) || `Color ${index + 1}`;
+
+    if (!grouped[colorName]) {
+      grouped[colorName] = [];
+    }
+    grouped[colorName].push(filename);
+  }
+
+  return grouped;
+};
+
 const toPlainImage = (img) => {
   if (!img) return null;
   if (typeof img.toObject === "function") {
-    return img.toObject();
+    img = img.toObject();
   }
+
+  const coloredImages = Array.isArray(img.coloredImages)
+    ? img.coloredImages.filter(Boolean)
+    : [];
+
+  if (coloredImages.length === 0) {
+    return null;
+  }
+
+  // Map to full URLs for each image
+  const urlPrefix = "/uploads/products/";
+  const coloredImageUrls = coloredImages.map((filename) =>
+    filename.startsWith("http") ? filename : urlPrefix + filename
+  );
+
   return {
     colorName: img.colorName,
-    coloredImage: img.coloredImage,
+    coloredImages: coloredImageUrls,
   };
+};
+
+const toRawImage = (img) => {
+  if (!img) return null;
+  if (typeof img.toObject === "function") {
+    img = img.toObject();
+  }
+
+  const coloredImages = Array.isArray(img.coloredImages)
+    ? img.coloredImages.filter(Boolean)
+    : img.coloredImage
+    ? [img.coloredImage]
+    : [];
+
+  if (coloredImages.length === 0) {
+    return null;
+  }
+
+  return {
+    colorName: img.colorName,
+    coloredImages,
+  };
+};
+
+const buildColorVariantImages = (colorNames, colorImages) => {
+  const variants = [];
+
+  for (let index = 0; index < colorImages.length; index++) {
+    const colorName = (colorNames[index] && String(colorNames[index]).trim()) || `Color ${index + 1}`;
+    const filename = colorImages[index].filename;
+    const existing = variants.find((variant) => variant.colorName === colorName);
+
+    if (existing) {
+      existing.coloredImages.push(filename);
+    } else {
+      variants.push({
+        colorName,
+        coloredImages: [filename],
+      });
+    }
+  }
+
+  return variants;
 };
 
 const getVideoFilePaths = (filename) => ({
@@ -91,14 +166,15 @@ exports.createProduct = async (req, res, next) => {
           colorNames.push(`Color ${i + 1}`);
         }
 
-        // Embed images directly with colorName and coloredImage
-        for (let i = 0; i < colorImages.length; i++) {
-          images.push({
-            colorName: colorNames[i].trim(),
-            coloredImage: colorImages[i].filename,
-          });
-          console.log(`Added image variant: ${colorNames[i]} (${colorImages[i].filename})`);
-        }
+        // Group same-color uploads into a single color variant
+        const groupedVariants = buildColorVariantImages(colorNames, colorImages);
+        images = groupedVariants;
+
+        groupedVariants.forEach((variant) => {
+          console.log(
+            `Added image variant: ${variant.colorName} (${variant.coloredImages.join(", ")})`
+          );
+        });
       }
 
       // Get video if provided
@@ -830,10 +906,11 @@ const deleteFileSync = (filePath) => {
 
 exports.deleteProductImages = async (req, res, next) => {
   console.log("deleteProductImages called:", req.params);
-  const { productId, imroageId } = req.params;
+  const { productId, imageId: imageIdParam } = req.params;
+  const imageId = imageIdParam ? decodeURIComponent(imageIdParam) : undefined;
 
   // ✅ VALIDATION: Check if IDs are valid
-  if (!productId || !imroageId) {
+  if (!productId || !imageId) {
     return res.status(400).json({ error: "Product ID and Image ID are required" });
   }
 
@@ -846,32 +923,101 @@ exports.deleteProductImages = async (req, res, next) => {
 
     // Find image by filename, colorName, or index
     let imageIndex = -1;
+    let colorIndex = -1;
+    let imagePathToDelete = null;
 
-    if (!isNaN(imroageId)) {
-      // imroageId is an index
-      imageIndex = parseInt(imroageId);
+    // Check if imageId is a number (index)
+    if (!isNaN(imageId)) {
+      const index = parseInt(imageId);
+      if (index >= 0 && index < product.images.length) {
+        imageIndex = index;
+        const imageObj = product.images[index];
+        if (imageObj.coloredImages && Array.isArray(imageObj.coloredImages)) {
+          // If it's an array, we need to find which specific image
+          if (imageObj.coloredImages.length === 1) {
+            imagePathToDelete = imageObj.coloredImages[0];
+          }
+        } else if (imageObj.coloredImage) {
+          imagePathToDelete = imageObj.coloredImage;
+        }
+      }
     } else {
-      // imroageId is a filename or colorName
-      imageIndex = product.images.findIndex((img) => 
-        img.coloredImage === imroageId || img.colorName === imroageId
-      );
+      // imageId is a filename or colorName - search through all images
+      for (let i = 0; i < product.images.length; i++) {
+        const img = product.images[i];
+        
+        // Check if it's a coloredImages array
+        if (img.coloredImages && Array.isArray(img.coloredImages)) {
+          const fileIndex = img.coloredImages.findIndex(path => 
+            path.includes(imageId) || path === imageId
+          );
+          if (fileIndex !== -1) {
+            imageIndex = i;
+            colorIndex = fileIndex;
+            imagePathToDelete = img.coloredImages[fileIndex];
+            break;
+          }
+        }
+        
+        // Check if it's a single coloredImage
+        if (img.coloredImage && (img.coloredImage.includes(imageId) || img.coloredImage === imageId)) {
+          imageIndex = i;
+          imagePathToDelete = img.coloredImage;
+          break;
+        }
+        
+        // Check by colorName
+        if (img.colorName === imageId) {
+          imageIndex = i;
+          if (img.coloredImages && Array.isArray(img.coloredImages)) {
+            // Delete all images for this color
+            imagePathToDelete = img.coloredImages;
+          } else if (img.coloredImage) {
+            imagePathToDelete = img.coloredImage;
+          }
+          break;
+        }
+      }
     }
 
-    if (imageIndex === -1 || imageIndex >= product.images.length) {
+    if (imageIndex === -1) {
       return res.status(404).json({ error: "Image not found in the product" });
     }
 
-    const deletedImage = product.images.splice(imageIndex, 1)[0];
+    let deletedImage = null;
     
-    // Delete the actual image file from folder
-    if (deletedImage && deletedImage.coloredImage) {
-      try {
-        const filePath = path.join(__dirname, "../uploads/products", deletedImage.coloredImage);
-        await deleteFile(filePath);
-      } catch (err) {
-        console.error(`Error deleting image file ${deletedImage.coloredImage}:`, err);
-        // Continue with database deletion
+    // Handle deletion based on structure
+    if (colorIndex !== -1 && product.images[imageIndex].coloredImages) {
+      // Remove single image from coloredImages array
+      deletedImage = product.images[imageIndex].coloredImages.splice(colorIndex, 1)[0];
+      
+      // If no images left for this color, remove the entire color variant
+      if (product.images[imageIndex].coloredImages.length === 0) {
+        deletedImage = product.images.splice(imageIndex, 1)[0];
       }
+    } else {
+      // Remove entire color variant
+      deletedImage = product.images.splice(imageIndex, 1)[0];
+    }
+    
+    // Delete the actual image file(s) from folder
+    const deleteImageFiles = async (paths) => {
+      const pathsToDelete = Array.isArray(paths) ? paths : [paths];
+      for (const imgPath of pathsToDelete) {
+        if (imgPath) {
+          try {
+            const filePath = path.join(__dirname, "../uploads/products", imgPath);
+            await deleteFile(filePath);
+          } catch (err) {
+            console.error(`Error deleting image file ${imgPath}:`, err);
+            // Continue with database deletion
+          }
+        }
+      }
+    };
+    
+    if (imagePathToDelete) {
+      await deleteImageFiles(imagePathToDelete);
     }
 
     await product.save();
@@ -909,7 +1055,69 @@ exports.updateProduct = async (req, res, next) => {
       return res.status(400).json({ error: "Stock quantity must be a valid number" });
     }
 
-    let images = (product.images || []).map(toPlainImage).filter(Boolean);
+    let images = (product.images || []).map(toRawImage).filter(Boolean);
+
+    const deletedVariantImagesRaw = req.body.deletedVariantImages || req.body.deletedvariantimages;
+    if (deletedVariantImagesRaw) {
+      try {
+        const deletedVariantImages = JSON.parse(
+          typeof deletedVariantImagesRaw === "string"
+            ? deletedVariantImagesRaw
+            : JSON.stringify(deletedVariantImagesRaw)
+        );
+
+        const deletedKeys = new Set(
+          (Array.isArray(deletedVariantImages) ? deletedVariantImages : [deletedVariantImages])
+            .flatMap((value) => {
+              const text = String(value || "").trim();
+              if (!text) {
+                return [];
+              }
+
+              const filename = text.split("/").pop() || text;
+              return [text, filename];
+            })
+        );
+
+        if (deletedKeys.size > 0) {
+          const retainedImages = [];
+
+          for (const img of images) {
+            const oldFiles = Array.isArray(img.coloredImages)
+              ? img.coloredImages
+              : img.coloredImage
+              ? [img.coloredImage]
+              : [];
+
+            const keptFiles = [];
+
+            for (const filename of oldFiles) {
+              if (deletedKeys.has(filename) || deletedKeys.has(String(filename).split("/").pop() || filename)) {
+                try {
+                  const filePath = path.join(__dirname, "../uploads/products", filename);
+                  await deleteFile(filePath);
+                } catch (err) {
+                  console.error("Error deleting removed variant image:", err);
+                }
+              } else {
+                keptFiles.push(filename);
+              }
+            }
+
+            if (keptFiles.length > 0) {
+              retainedImages.push({
+                colorName: img.colorName,
+                coloredImages: keptFiles,
+              });
+            }
+          }
+
+          images = retainedImages;
+        }
+      } catch (error) {
+        return res.status(400).json({ error: "Invalid deletedVariantImages payload" });
+      }
+    }
 
     // ✅ Full variant sync from frontend (colors + existing paths + new files)
     const variantsMetaRaw = req.body.variantsMeta || req.body.variantsmeta;
@@ -923,53 +1131,105 @@ exports.updateProduct = async (req, res, next) => {
         );
         if (Array.isArray(meta) && meta.length > 0) {
           const newFiles = getUploadedFiles(req.files, "coloredImage");
-          let fileIdx = 0;
+          const newFilesByColorName = groupUploadedColorFilesByColorName(req.body, newFiles);
           const rebuilt = [];
+
+          const normalizeImageKeys = (values) => {
+            const items = Array.isArray(values) ? values : values ? [values] : [];
+            return items.flatMap((value) => {
+              const text = String(value || "").trim();
+              if (!text) {
+                return [];
+              }
+
+              const filename = text.split("/").pop() || text;
+              return [text, filename];
+            });
+          };
 
           for (let i = 0; i < meta.length; i++) {
             const slot = meta[i] || {};
             const colorName =
               (slot.color && String(slot.color).trim()) || `Color ${i + 1}`;
 
-            if (slot.hasNewImage && newFiles[fileIdx]) {
+            const existingImages = Array.isArray(slot.existingImages)
+              ? slot.existingImages.filter(Boolean)
+              : slot.existingImage
+              ? [slot.existingImage]
+              : [];
+
+            const deletedImageKeys = new Set(normalizeImageKeys(slot.deletedImages));
+            const retainedExistingImages = existingImages.filter((imagePath) => {
+              const filename = String(imagePath).split("/").pop() || String(imagePath);
+              return !deletedImageKeys.has(imagePath) && !deletedImageKeys.has(filename);
+            });
+
+            const newImagesForColor = newFilesByColorName[colorName] || [];
+            if (newImagesForColor.length > 0) {
+              retainedExistingImages.push(...newImagesForColor);
+            }
+
+            if (retainedExistingImages.length > 0) {
               rebuilt.push({
                 colorName,
-                coloredImage: newFiles[fileIdx++].filename,
-              });
-            } else if (slot.existingImage) {
-              rebuilt.push({
-                colorName,
-                coloredImage: slot.existingImage,
+                coloredImages: retainedExistingImages,
               });
             }
           }
 
           if (rebuilt.length > 0) {
-            const retained = new Set(rebuilt.map((img) => img.coloredImage));
+            const retained = new Set(
+              rebuilt.flatMap((img) => img.coloredImages || [])
+            );
             for (const old of images) {
-              if (old.coloredImage && !retained.has(old.coloredImage)) {
-                try {
-                  const filePath = path.join(
-                    __dirname,
-                    "../uploads/products",
-                    old.coloredImage
-                  );
-                  await deleteFile(filePath);
-                } catch (err) {
-                  console.error("Error deleting replaced image:", err);
+              const oldFiles = Array.isArray(old.coloredImages)
+                ? old.coloredImages
+                : old.coloredImage
+                ? [old.coloredImage]
+                : [];
+
+              for (const filename of oldFiles) {
+                if (!retained.has(filename)) {
+                  try {
+                    const filePath = path.join(
+                      __dirname,
+                      "../uploads/products",
+                      filename
+                    );
+                    await deleteFile(filePath);
+                  } catch (err) {
+                    console.error("Error deleting replaced image:", err);
+                  }
                 }
               }
             }
             images = rebuilt;
-          } else if (meta.length > 0 && images.length > 0) {
-            images = images.map((img, index) => ({
-              colorName:
-                meta[index]?.color && String(meta[index].color).trim()
-                  ? String(meta[index].color).trim()
-                  : img.colorName,
-              coloredImage: img.coloredImage,
-            }));
+          } else {
+            images = [];
           }
+        } else if (Array.isArray(meta) && meta.length === 0) {
+          for (const old of images) {
+            const oldFiles = Array.isArray(old.coloredImages)
+              ? old.coloredImages
+              : old.coloredImage
+              ? [old.coloredImage]
+              : [];
+
+            for (const filename of oldFiles) {
+              try {
+                const filePath = path.join(
+                  __dirname,
+                  "../uploads/products",
+                  filename
+                );
+                await deleteFile(filePath);
+              } catch (err) {
+                console.error("Error deleting cleared image file:", err);
+              }
+            }
+          }
+
+          images = [];
         }
       } catch (parseError) {
         return res.status(400).json({ error: "Invalid variantsMeta payload" });
@@ -996,11 +1256,18 @@ exports.updateProduct = async (req, res, next) => {
         console.log(`Removing ${images.length} existing image(s)...`);
         if (product.images && product.images.length > 0) {
           for (const img of product.images) {
-            try {
-              const filePath = path.join(__dirname, "../uploads/products", img.coloredImage);
-              deleteFileSync(filePath);
-            } catch (err) {
-              console.error("Error deleting old image file:", err);
+            const filesToDelete = Array.isArray(img.coloredImages)
+              ? img.coloredImages
+              : img.coloredImage
+              ? [img.coloredImage]
+              : [];
+            for (const filename of filesToDelete) {
+              try {
+                const filePath = path.join(__dirname, "../uploads/products", filename);
+                deleteFileSync(filePath);
+              } catch (err) {
+                console.error("Error deleting old image file:", err);
+              }
             }
           }
         }
@@ -1008,19 +1275,38 @@ exports.updateProduct = async (req, res, next) => {
       }
 
       // ✅ Embed new images directly
-      // Auto-fill missing color names
+      const groupedVariants = buildColorVariantImages(colorNames, colorImages);
       for (let i = colorNames.length; i < colorImages.length; i++) {
-        colorNames.push(`Color ${i + 1}`);
+        if (!colorNames[i]) {
+          colorNames[i] = `Color ${i + 1}`;
+        }
       }
 
       try {
-        for (let i = 0; i < colorImages.length; i++) {
-          images.push({
-            colorName: colorNames[i].trim(),
-            coloredImage: colorImages[i].filename,
-          });
-          console.log(`Added image variant: ${colorNames[i]} (${colorImages[i].filename})`);
+        if (groupedVariants.length > 0) {
+          if (replaceImages || images.length === 0) {
+            images = groupedVariants;
+          } else {
+            for (const variant of groupedVariants) {
+              const existing = images.find((img) => img.colorName === variant.colorName);
+              if (existing) {
+                existing.coloredImages = [
+                  ...(existing.coloredImages || [existing.coloredImage]).filter(Boolean),
+                  ...variant.coloredImages,
+                ];
+                existing.coloredImage = existing.coloredImages[0];
+              } else {
+                images.push(variant);
+              }
+            }
+          }
         }
+
+        groupedVariants.forEach((variant) => {
+          console.log(
+            `Added image variant: ${variant.colorName} (${variant.coloredImages.join(", ")})`
+          );
+        });
         console.log(`✅ Successfully added ${colorImages.length} image(s)`);
       } catch (imageError) {
         // ✅ CLEANUP: Delete any uploaded image files if save fails
@@ -1042,9 +1328,10 @@ exports.updateProduct = async (req, res, next) => {
           images = images.map((img, index) => ({
             colorName:
               colorNames[index] !== undefined && colorNames[index] !== ""
-                ? colorNames[index]
+                ? String(colorNames[index]).trim()
                 : img.colorName,
-            coloredImage: img.coloredImage,
+            coloredImages: img.coloredImages ||
+              (img.coloredImage ? [img.coloredImage] : []),
           }));
           console.log(
             `✅ Updated ${Math.min(colorNames.length, images.length)} variant color(s) without new files`
@@ -1056,6 +1343,9 @@ exports.updateProduct = async (req, res, next) => {
     // Get video if provided, otherwise keep existing
     let videoFilename = product.video;
     const uploadedVideos = getUploadedFiles(req.files, "video");
+    const removeVideo =
+      req.body.removeVideo === "true" || req.body.removeVideo === true;
+
     if (uploadedVideos.length > 0) {
       const uploadedVideo = uploadedVideos[0];
       if (!uploadedVideo.size) {
@@ -1070,6 +1360,15 @@ exports.updateProduct = async (req, res, next) => {
           console.error("Error deleting old video:", err);
         }
       }
+    } else if (removeVideo) {
+      if (product.video) {
+        try {
+          await deleteVideoFile(product.video);
+        } catch (err) {
+          console.error("Error deleting removed video:", err);
+        }
+      }
+      videoFilename = null;
     }
 
     // ✅ IMPROVED: Update product with new data and validation

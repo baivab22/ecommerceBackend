@@ -3,9 +3,10 @@ const mongoose = require("mongoose");
 const productImageSchema = new mongoose.Schema(
   {
     colorName: String,
-    coloredImage: {
-      type: String,
+    coloredImages: {
+      type: [String],
       required: true,
+      default: undefined,
     },
   },
   {
@@ -78,9 +79,10 @@ const productSchema = new mongoose.Schema(
     
     images: [{
       colorName: String,
-      coloredImage: {
-        type: String,
+      coloredImages: {
+        type: [String],
         required: true,
+        default: undefined,
       }
     }],
     

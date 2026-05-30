@@ -172,7 +172,7 @@ router.patch("/product/:productId", cpUploadProductVideo, updateProduct);
 router.delete("/product/:productId", deleteProduct);
 router.get("/product/:productId", getProductDetailsById);
 router.get("/product/category/:categoryId", productListByCategory);
-router.delete("/product/:productId/:imroageId", deleteProductImages);
+router.delete("/product/:productId/:imageId(*)", deleteProductImages);
 
 // Hot Selling Routes
 router.get('/products/hot-selling', getHotSellingProducts);
