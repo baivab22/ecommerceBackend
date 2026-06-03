@@ -18,7 +18,7 @@ const router = express.Router();
 router.post("/socialLinks", createSocialLinks);
 router.get("/socialLinks", getSocialLinks);
 router.put("/socialLinks/:id", updateSocialLinks);
-router.delete("/socialLinks:id", deletesocialLinks);
+router.delete("/socialLinks/:id", deletesocialLinks);
 router.get("/socialLinks/:id", getSocialItemById);
 
 // module.exports = router;
