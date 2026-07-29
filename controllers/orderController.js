@@ -519,7 +519,6 @@ exports.createOrder = async (req, res) => {
 
     const newOrderData = new Orders({
       ...req.body,
-      productOrderId: shortOrderId,
       ncmVendorRefId: shortOrderId,
       locationAddress: normalizedLocationAddress,
       shippingLocation: normalizedShippingLocation,
