@@ -1,5 +1,14 @@
 const nodemailer = require('nodemailer');
 
+const SMTP_CONFIG = {
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
+  user: 'planingdirectoratetu@gmail.com',
+  pass: 'jjuu pqpt zfbh qxlm',
+  fromAddress: 'planingdirectoratetu@gmail.com',
+};
+
 const parseRecipients = (value) =>
   String(value || '')
     .split(',')
@@ -7,31 +16,23 @@ const parseRecipients = (value) =>
     .filter(Boolean);
 
 const EMAIL_CONFIG = {
-  sender: process.env.MAIL_SENDER_EMAIL || process.env.SMTP_USER,
-  admin: process.env.ADMIN_EMAIL,
-  adminRecipients: parseRecipients(process.env.ADMIN_EMAIL),
+  sender: SMTP_CONFIG.fromAddress,
+  admin: SMTP_CONFIG.fromAddress,
+  adminRecipients: parseRecipients(SMTP_CONFIG.fromAddress),
 };
 
-if (
-  !EMAIL_CONFIG.sender ||
-  !process.env.SMTP_USER ||
-  !process.env.SMTP_PASS ||
-  EMAIL_CONFIG.adminRecipients.length === 0
-) {
-  throw new Error(
-    'Missing email configuration. Set MAIL_SENDER_EMAIL, SMTP_USER, SMTP_PASS, and ADMIN_EMAIL in server/.env'
-  );
-}
-
 const transporter = nodemailer.createTransport({
-  service: 'Gmail',
+  host: SMTP_CONFIG.host,
+  port: SMTP_CONFIG.port,
+  secure: SMTP_CONFIG.secure,
   auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
+    user: SMTP_CONFIG.user,
+    pass: SMTP_CONFIG.pass,
   },
 });
 
 module.exports = {
+  SMTP_CONFIG,
   EMAIL_CONFIG,
   transporter,
 };
