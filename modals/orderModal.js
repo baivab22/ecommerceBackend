@@ -53,9 +53,6 @@ giftBoxCharge:Number,
   
 
   productOrderId: String,
-  ncmVendorRefId: {
-    type: String,
-  },
   date: {
     type: Date,
     default: Date.now, // Automatically sets current date/time when a document is created
@@ -86,68 +83,11 @@ giftBoxCharge:Number,
       type: Date,
     },
 
-    ncmOrderId: {
-      type: String,
-    },
-    ncmPickupCreatedAt: {
-      type: Date,
-    },
-    ncmSyncStatus: {
-      type: String,
-      enum: ['pending', 'success', 'failed', 'skipped'],
-      default: 'pending',
-    },
-    ncmSyncError: {
-      type: String,
-    },
-    ncmRetryCount: {
-      type: Number,
-      default: 0,
-    },
-    ncmNextRetryAt: {
-      type: Date,
-    },
-    ncmLastSyncAt: {
-      type: Date,
-    },
-    ncmLastStatus: {
-      type: String,
-    },
-    ncmLastStatusAt: {
-      type: Date,
-    },
-    ncmLastNotifiedStatus: {
-      type: String,
-    },
-    ncmLastStatusNotifiedAt: {
-      type: Date,
-    },
-    ncmNotifiedStatusKeys: {
-      type: [String],
-      default: [],
-    },
-    ncmLastComment: {
-      type: String,
-    },
-    ncmLastCommentAt: {
-      type: Date,
-    },
-    ncmLastWebhookEvent: {
-      type: String,
-    },
-    ncmLastWebhookAt: {
-      type: Date,
-    },
-    ncmDestinationBranch: {
-      type: String,
-    },
-
-        deliveryPartner: String
+    deliveryPartner: String
  
   // timestamps: true
 });
 
-OrderProductSchema.index({ isConfirmed: 1, ncmSyncStatus: 1, ncmNextRetryAt: 1, ncmOrderId: 1 });
-OrderProductSchema.index({ ncmOrderId: 1 });
+
 
 module.exports = mongoose.model("Orders", OrderProductSchema);

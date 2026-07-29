@@ -241,7 +241,6 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
 
   const customerName = order?.userId?.name || 'Valued Customer';
   const orderId = order?.productOrderId || order?._id || 'N/A';
-  const ncmOrderId = order?.ncmOrderId || 'N/A';
   const currentTotal = formatCurrency(order?.totalAmount);
 
   const emailSubject = `Delivery Update: Order ${orderId} is now ${newStatus}`;
@@ -251,7 +250,6 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
 
     <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:12px 0;">
       <p style="margin:4px 0;"><strong>Order Reference:</strong> ${orderId}</p>
-      <p style="margin:4px 0;"><strong>NCM Order ID:</strong> ${ncmOrderId}</p>
       <p style="margin:4px 0;"><strong>Previous Status:</strong> ${previousStatus}</p>
       <p style="margin:4px 0;"><strong>Current Status:</strong> ${newStatus}</p>
       <p style="margin:4px 0;"><strong>Status Time:</strong> ${statusTimeLabel}</p>

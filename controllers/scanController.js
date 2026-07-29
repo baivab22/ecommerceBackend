@@ -1,6 +1,6 @@
 const Orders = require("../modals/orderModal");
 const { Product } = require("../modals/product.modal");
-const { sendOrderDispatchedNotification } = require("../services/orderNotificationService");
+const { sendOrderConfirmationToCustomer } = require("../services/emailServices");
 
 // Mark order(s) as scanned and update sales - supports both single and bulk operations
 const markOrderAsScanned = async (req, res) => {
@@ -59,9 +59,11 @@ const markOrderAsScanned = async (req, res) => {
           });
           continue;
         }
-        // Update order as scanned
+        // Update order as scanned and confirmed
         order.isScanned = true;
         order.scannedAt = new Date();
+        order.isConfirmed = true;
+        order.confirmedAt = new Date();
         await order.save();
 
         // Stock is already reduced during order creation; avoid decrementing again on scan.
@@ -79,17 +81,25 @@ const markOrderAsScanned = async (req, res) => {
             );
           }
         }
+        // Send confirmation email to customer
+        try {
+          await sendOrderConfirmationToCustomer(order);
+          results.notifications.push({
+            orderId: order.productOrderId,
+            email: true,
+          });
+        } catch (emailError) {
+          console.error(`Failed to send confirmation email for order ${order.productOrderId}:`, emailError);
+          results.notifications.push({
+            orderId: order.productOrderId,
+            email: false,
+            error: emailError.message,
+          });
+        }
+
         results.successful.push({
           orderId: order.productOrderId,
           order: order
-        });
-
-        // Send customer notifications after successful scan confirmation.
-        // const notificationStatus = await sendOrderDispatchedNotification(order);
-        results.notifications.push({
-          orderId: order.productOrderId,
-          email: notificationStatus.email,
-          whatsapp: notificationStatus.whatsapp
         });
 
       } catch (error) {

@@ -55,7 +55,6 @@ const sendOutOfStockNotification = async (newOutOfStockProducts) => {
                   <tr style="background-color: #ffe0b2;">
                     <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">Product Name</th>
                     <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">ID</th>
-                    <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">Price</th>
                     <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">Category</th>
                     <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">Total Sales</th>
                     <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ffb74d;">Last Sold</th>
@@ -66,7 +65,6 @@ const sendOutOfStockNotification = async (newOutOfStockProducts) => {
                     <tr style="border-bottom: 1px solid #ffe0b2;">
                       <td style="padding: 10px;">${product.name}</td>
                       <td style="padding: 10px; font-family: monospace;">${product._id}</td>
-                      <td style="padding: 10px;">$${product.price || 'N/A'}</td>
                       <td style="padding: 10px;">${product.category?.name || 'N/A'}</td>
                       <td style="padding: 10px;">${product.totalSales || 0}</td>
                       <td style="padding: 10px;">${product.lastSoldAt ? new Date(product.lastSoldAt).toLocaleDateString() : 'Never'}</td>
@@ -138,7 +136,6 @@ const sendCompleteOutOfStockReport = async () => {
                   <tr style="background-color: #ffe0b2;">
                     <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">Product Name</th>
                     <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">ID</th>
-                    <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">Price</th>
                     <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">Category</th>
                     <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">Total Sales</th>
                     <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ffb74d;">Last Sold</th>
@@ -149,7 +146,6 @@ const sendCompleteOutOfStockReport = async () => {
                     <tr style="${index % 2 === 0 ? 'background-color: #fff8e1;' : 'background-color: white;'}">
                       <td style="padding: 10px; border-bottom: 1px solid #ffe0b2;"><strong>${product.name}</strong></td>
                       <td style="padding: 10px; border-bottom: 1px solid #ffe0b2; font-family: monospace; font-size: 12px;">${product._id}</td>
-                      <td style="padding: 10px; border-bottom: 1px solid #ffe0b2;">$${product.price || 'N/A'}</td>
                       <td style="padding: 10px; border-bottom: 1px solid #ffe0b2;">${product.category?.name || 'N/A'}</td>
                       <td style="padding: 10px; border-bottom: 1px solid #ffe0b2; text-align: center;">${product.totalSales || 0}</td>
                       <td style="padding: 10px; border-bottom: 1px solid #ffe0b2;">${product.lastSoldAt ? new Date(product.lastSoldAt).toLocaleDateString() : 'Never'}</td>
@@ -382,64 +378,12 @@ const sendOrderConfirmationToCustomer = async (order) => {
   }
 };
 
-const sendNcmPickupNotificationToCustomer = async (order, ncmMeta) => {
-  try {
-    const customerEmail = order?.userId?.email;
-    if (!customerEmail) return false;
-
-    const customerName = order?.userId?.name || 'Valued Customer';
-    const orderId = order?.productOrderId || order?._id || 'N/A';
-    const ncmOrderId = String(ncmMeta?.ncmOrderId || 'N/A');
-
-    const subject = `NCM Pickup Created for Order #${orderId}`;
-
-    const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 680px; margin: 0 auto; color: #111827;">
-        <h2 style="margin: 0 0 12px; color: #111827;">Your Order Pickup Is Scheduled</h2>
-        <p>Dear ${customerName},</p>
-        <p>Your order has been scheduled for pickup with our courier partner (NCM).</p>
-        <div style="background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin: 14px 0;">
-          <p style="margin: 4px 0;"><strong>Order ID:</strong> ${orderId}</p>
-          <p style="margin: 4px 0;"><strong>NCM Pickup ID:</strong> ${ncmOrderId}</p>
-          <p style="margin: 4px 0;"><strong>Destination Branch:</strong> ${order?.ncmDestinationBranch || 'N/A'}</p>
-        </div>
-        <p style="margin: 0 0 10px; line-height: 1.6;">You will receive tracking updates as the order moves through the courier network.</p>
-        <p style="margin: 0 0 10px; line-height: 1.6;">If you have any questions, reply to this email or contact us at ${EMAIL_CONFIG.sender}.</p>
-        <p style="margin: 18px 0 0;">Thank you for shopping with Aabhushan Gallery.</p>
-      </div>
-    `;
-
-    // Attach the same invoice image for reference
-    const invoicePng = await generateInvoicePngBuffer({ order, customerEmail, customerName, senderEmail: EMAIL_CONFIG.sender, title: 'NCM Pickup' });
-    const fallbackPng = invoicePng ? null : await generateInvoicePngFromSvgBuffer({ order, customerEmail, customerName, senderEmail: EMAIL_CONFIG.sender, title: 'NCM Pickup' });
-    const finalInvoicePng = invoicePng || fallbackPng;
-
-    const mailOptions = {
-      from: EMAIL_CONFIG.sender,
-      to: customerEmail,
-      subject,
-      html,
-      attachments: [],
-    };
-
-    if (finalInvoicePng) {
-      mailOptions.attachments.push({ filename: `order-${orderId}-ncm-pickup.png`, content: finalInvoicePng, contentType: 'image/png' });
-    }
-
-    await transporter.sendMail(mailOptions);
-    return true;
-  } catch (error) {
-    console.error('Error sending NCM pickup email to customer:', error);
-    return false;
-  }
-};
-
 module.exports = {
   sendOutOfStockNotification,
   sendCompleteOutOfStockReport,
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
-  sendNcmPickupNotificationToCustomer,
+
   transporter,
   EMAIL_CONFIG,
 };
