@@ -551,17 +551,45 @@ exports.checkOutOfStockProducts = async (req, res) => {
 // New endpoint to get complete out-of-stock report
 exports.getOutOfStockReport = async (req, res) => {
   try {
-    const outOfStockProducts = await Product.find({ 
-      stockQuantity: 0 
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search ? String(req.query.search).trim() : '';
+
+    const allOutOfStockProducts = await Product.find({
+      stockQuantity: { $lte: 0 },
     })
-    .populate('category')
-    .populate('subCategory')
-    .sort({ totalSales: -1, lastSoldAt: -1 });
+      .populate('category')
+      .populate('subCategory')
+      .sort({ totalSales: -1, lastSoldAt: -1 });
+
+    let filteredProducts = allOutOfStockProducts;
+    if (search) {
+      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escapedSearch, 'i');
+      filteredProducts = allOutOfStockProducts.filter(
+        (product) =>
+          (product.name && regex.test(product.name)) ||
+          (product.category?.name && regex.test(product.category.name)) ||
+          (product.subCategory?.name && regex.test(product.subCategory.name))
+      );
+    }
+
+    const total = filteredProducts.length;
+    const paginatedProducts = filteredProducts.slice(skip, skip + limit);
 
     res.status(200).json({
-      data: outOfStockProducts,
-      total: outOfStockProducts.length,
-      success: "Successfully retrieved out-of-stock report"
+      data: paginatedProducts,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      summary: {
+        total,
+        highSales: allOutOfStockProducts.filter((p) => (p.totalSales || 0) >= 50).length,
+        notificationPending: allOutOfStockProducts.filter((p) => !p.outOfStockNotificationSent).length,
+      },
+      success: "Successfully retrieved out-of-stock report",
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
