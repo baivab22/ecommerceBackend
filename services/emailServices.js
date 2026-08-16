@@ -293,12 +293,12 @@ const sendNewOrderPlacedNotification = async (order) => {
 
 const sendOrderConfirmationToCustomer = async (order) => {
   try {
-    const customerEmail = order?.userId?.email;
+    const customerEmail = order?.userId?.email || order?.email;
     if (!customerEmail) {
       return false;
     }
 
-    const customerName = order?.userId?.name || 'Valued Customer';
+    const customerName = order?.userId?.name || order?.fullName || 'Valued Customer';
     const orderId = order?.productOrderId || order?._id || 'N/A';
 
     const confirmationSubject = `Order Confirmed #${orderId}`;
@@ -352,23 +352,25 @@ const sendOrderConfirmationToCustomer = async (order) => {
         });
 
     const finalInvoicePng = invoicePng || fallbackPng;
-    if (!finalInvoicePng) {
-      console.error('Unable to generate PNG invoice attachment for order:', orderId);
-      return false;
-    }
 
-    const attachment = {
-      filename: `order-confirmation-${orderId}.png`,
-      content: finalInvoicePng,
-      contentType: 'image/png',
-    };
+    const attachment = finalInvoicePng
+      ? [{
+          filename: `order-confirmation-${orderId}.png`,
+          content: finalInvoicePng,
+          contentType: 'image/png',
+        }]
+      : [];
+
+    if (!finalInvoicePng) {
+      console.error('Unable to generate PNG invoice attachment for order:', orderId, '- sending email without attachment');
+    }
 
     await transporter.sendMail({
       from: EMAIL_CONFIG.sender,
       to: customerEmail,
       subject: confirmationSubject,
       html: confirmationHtml,
-      attachments: [attachment],
+      attachments: attachment,
     });
 
     return true;
