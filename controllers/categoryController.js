@@ -167,7 +167,9 @@ exports.addSubCategoryToCategory = async (req, res, next) => {
       message: "success fully updated categories",
       data: updatedCategoryDataCategory,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error adding subcategory to category", error: error.message });
+  }
 };
 
 // for subCategory Section
@@ -180,7 +182,9 @@ exports.createSubCategory = async (req, res, next) => {
       message: "success fully create subcategories",
       data: createSubCategoryData,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error creating subcategory", error: error.message });
+  }
 };
 
 exports.deleteSubCategory = async (req, res, next) => {
@@ -188,41 +192,46 @@ exports.deleteSubCategory = async (req, res, next) => {
     const deleteSubCategoryData = await Category.SubCategory.deleteOne(
       {
         _id: req.params.subCategoryId,
-      },
-      {
-        new: true,
       }
     );
 
-    res.status(201).json({
+    res.status(200).json({
       message: "success fully deleted subcategory",
       data: deleteSubCategoryData,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting subcategory", error: error.message });
+  }
 };
 
 exports.updateSubCategory = async (req, res, next) => {
   try {
     const udpateSubCategoryData = await Category.SubCategory.findOneAndUpdate(
       { _id: req.params.subCategoryId },
-      req.body,
+      { $set: req.body },
       {
         new: true,
       }
     );
 
-    res.status(201).json({
+    res.status(200).json({
       message: "success fully udpated  subcategories",
       data: udpateSubCategoryData,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error updating subcategory", error: error.message });
+  }
 };
 
 exports.getAllSubCategory = async (req, res, next) => {
-  const data = await Category.SubCategory.find().populate("subCategories");
-  res
-    .status(201)
-    .json({ message: "success fully get subcategories", data: data });
+  try {
+    const data = await Category.SubCategory.find().populate("subCategories");
+    res
+      .status(200)
+      .json({ message: "success fully get subcategories", data: data });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+  }
 };
 
 exports.getCategoryDetailsById = async (req, res, next) => {

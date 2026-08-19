@@ -9,8 +9,6 @@ const app = express();
 const PORT = process.env.PORT || 8000;
 
 const cors = require("cors");
-const bodyParser = require("body-parser");
-const dotenv = require("dotenv");
 
 // Routers
 const authRouter = require("./routes/authRoutes");
@@ -26,12 +24,12 @@ const holidayModeRouter = require("./routes/holidayMode.routes");
 const emailMarketingRoutes = require('./routes/emailMarketingRoutes');
 const { startHolidayModeSchedulers } = require('./schedulers/holidayMode.scheduler');
 
-console.log(process.env.PORT, "port number");
+console.log(`Server starting on port ${PORT}...`);
 
 // Middlewares
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: false }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 const uploadsDir = path.join(__dirname, "uploads");
 const uploadsVideoDir = path.join(uploadsDir, "video");
@@ -54,7 +52,12 @@ app.use("/uploads/video", (req, res, next) => {
   return res.status(404).send("Video not found");
 });
 
-app.use("/uploads", express.static(uploadsDir));
+app.use("/uploads", express.static(uploadsDir, {
+  maxAge: '30d',
+  etag: true,
+  lastModified: true,
+  immutable: true,
+}));
 
 // Backward compatibility: keep old root-level asset links working.
 app.get("/products/:file", (req, res) => {
@@ -113,7 +116,7 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "frontend/dist", "index.html"));
 });
 app.listen(PORT, () => {
-  console.log(`server initialized successfully in port no 8000`);
+  console.log(`Server initialized successfully on port ${PORT}`);
   startHolidayModeSchedulers();
 });
 

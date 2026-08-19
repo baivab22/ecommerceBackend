@@ -1,3 +1,4 @@
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { EMAIL_CONFIG, transporter } = require('./mailConfig');
 const { Product } = require("../modals/product.modal");
 const {
@@ -366,7 +367,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
     }
 
     await transporter.sendMail({
-      from: EMAIL_CONFIG.sender,
+      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: customerEmail,
       subject: confirmationSubject,
       html: confirmationHtml,

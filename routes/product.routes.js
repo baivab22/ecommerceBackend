@@ -144,6 +144,8 @@ const cpUploadProductVideo = uploadProducts.any();
 
 const cpUploadVariant = uploadVariant.any();
 
+const { optimizeUploadedImages } = require("../handlers/imageProcessor");
+
 const {
   getAllProduct,
   createProduct,
@@ -167,8 +169,8 @@ const {
 
 // Product CRUD
 router.route("/product").get(getAllProduct);
-router.route("/product/new").post(cpUploadProductVideo, createProduct);
-router.patch("/product/:productId", cpUploadProductVideo, updateProduct);
+router.route("/product/new").post(cpUploadProductVideo, optimizeUploadedImages, createProduct);
+router.patch("/product/:productId", cpUploadProductVideo, optimizeUploadedImages, updateProduct);
 router.delete("/product/:productId", deleteProduct);
 router.get("/product/:productId", getProductDetailsById);
 router.get("/product/category/:categoryId", productListByCategory);
@@ -181,7 +183,7 @@ router.delete('/products/hot-selling/:productId', removeFromHotSelling);
 router.patch('/products/hot-selling/bulk', bulkUpdateHotSelling);
 
 // Product Image Variants
-router.route("/productImage/new").post(cpUploadVariant, CreateProductImage);
+router.route("/productImage/new").post(cpUploadVariant, optimizeUploadedImages, CreateProductImage);
 router.delete("/productColor/:variantId", deleteProductColorVariantImages);
 router.route("/allColorVariant").get(getAllProductVariantImages);
 

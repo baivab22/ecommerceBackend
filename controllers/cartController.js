@@ -168,6 +168,8 @@ exports.deleteProductFromCart = async (req, res) => {
           data: updatedCart,
           message: "Successfully deleted product from cart",
         });
+      } else {
+        return res.status(404).json({ message: "Product not found in cart" });
       }
     }
   } catch (err) {

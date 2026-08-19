@@ -57,14 +57,21 @@ exports.createTestimonial = async (req, res, next) => {
       message: "success fully created testimonial",
       data: datas,
     });
-  } catch (error) {}
+  } catch (error) {
+    console.error("Error creating testimonial:", error);
+    res.status(500).json({ message: "Error creating testimonial", error: error.message });
+  }
 };
 
 exports.getAllTestimonial = async (req, res, next) => {
-  const data = await Testimonial.find();
-  res
-    .status(201)
-    .json({ message: "success fully got Testimonial", data: data });
+  try {
+    const data = await Testimonial.find();
+    res
+      .status(200)
+      .json({ message: "success fully got Testimonial", data: data });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching testimonials", error: error.message });
+  }
 };
 
 exports.deleteTestimonial = async (req, res, next) => {

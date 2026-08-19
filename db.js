@@ -1,17 +1,9 @@
 const mongoose = require("mongoose");
-const dbHOST = process.env.DBHOST;
-const { startHolidayModeSchedulers } = require('./schedulers/holidayMode.scheduler');
-
-
 
 mongoose
-  .connect(
-    // "mongodb+srv://bidaribaivab7:p8obzODALBzdJdyn@cluster1.sx4gni2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster1"
-    "mongodb+srv://bidaribaivab7:(meropassword12)@cluster0.l1lbpsa.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-  )
+  .connect(process.env.DBHOST)
   .then(() => {
-    console.log("MongoDB Connnected...");
-      startHolidayModeSchedulers();
+    console.log("MongoDB Connected...");
   })
   .catch((err) => {
     console.log("Error while Mongo Conn..", err);

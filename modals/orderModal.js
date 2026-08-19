@@ -52,7 +52,11 @@ giftBoxCharge:Number,
       isInsideValley: Boolean,
   
 
-  productOrderId: String,
+  productOrderId: {
+    type: String,
+    unique: true,
+    index: true,
+  },
   date: {
     type: Date,
     default: Date.now, // Automatically sets current date/time when a document is created

@@ -67,11 +67,15 @@ exports.deletesocialLinks = async (req, res) => {
 };
 exports.updateSocialLinks = async (req, res) => {
   try {
+    const { socialLinks, specialSlogan, offerText } = req.body;
+    const updateData = {};
+    if (socialLinks !== undefined) updateData.socialLinks = socialLinks;
+    if (specialSlogan !== undefined) updateData.specialSlogan = specialSlogan;
+    if (offerText !== undefined) updateData.offerText = offerText;
+
     const updatedContent = await SocialLinks.findByIdAndUpdate(
       req.params.id,
-      {
-        $set: req.body,
-      },
+      { $set: updateData },
       {
         new: true,
         runValidators: true,

@@ -1,12 +1,13 @@
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const nodemailer = require('nodemailer');
 
 const SMTP_CONFIG = {
   host: 'smtp.gmail.com',
   port: 465,
   secure: true,
-  user: 'planingdirectoratetu@gmail.com',
-  pass: 'jjuu pqpt zfbh qxlm',
-  fromAddress: 'planingdirectoratetu@gmail.com',
+  user: process.env.SMTP_USER,
+  pass: process.env.SMTP_PASS,
+  fromAddress: process.env.MAIL_SENDER_EMAIL,
 };
 
 const parseRecipients = (value) =>
@@ -17,8 +18,8 @@ const parseRecipients = (value) =>
 
 const EMAIL_CONFIG = {
   sender: SMTP_CONFIG.fromAddress,
-  admin: SMTP_CONFIG.fromAddress,
-  adminRecipients: parseRecipients(SMTP_CONFIG.fromAddress),
+  admin: process.env.ADMIN_EMAIL || SMTP_CONFIG.fromAddress,
+  adminRecipients: parseRecipients(process.env.ADMIN_EMAIL || SMTP_CONFIG.fromAddress),
 };
 
 const transporter = nodemailer.createTransport({

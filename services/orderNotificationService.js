@@ -1,3 +1,4 @@
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { transporter, EMAIL_CONFIG } = require("./mailConfig");
 const { getLogoAttachment, buildEmailShell } = require('./emailTemplate');
 
@@ -112,7 +113,7 @@ const sendDeliveryDispatchEmail = async (order) => {
   `;
 
   const mailOptions = {
-    from: EMAIL_CONFIG.sender,
+    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
     to: customerEmail,
     subject: emailSubject,
     html: buildEmailShell({
@@ -260,7 +261,7 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
   `;
 
   const mailOptions = {
-    from: EMAIL_CONFIG.sender,
+    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
     to: customerEmail,
     subject: emailSubject,
     html: buildEmailShell({

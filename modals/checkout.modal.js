@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const CheckOutProductSchema = new mongoose.Schema({
+const CheckoutProductSchema = new mongoose.Schema({
   userId: String,
   products: [
     {
@@ -12,7 +12,5 @@ const CheckOutProductSchema = new mongoose.Schema({
     },
   ],
 });
-
-// const cartSchema = new mongoose.Schema({});
 
 module.exports = mongoose.model("Checkout", CheckoutProductSchema);

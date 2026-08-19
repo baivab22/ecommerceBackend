@@ -20,11 +20,10 @@ const storage = multer.diskStorage({
 const bannerUpload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype.match(/png|gif|jpg|jpeg|jfif/)) {
-      cb(new Error("file is not supported"), false);
+    if (!file.mimetype.match(/^(png|gif|jpg|jpeg|jfif)$/i)) {
+      return cb(new Error("file is not supported"), false);
     }
     cb(null, true);
-    return;
   },
 });
 

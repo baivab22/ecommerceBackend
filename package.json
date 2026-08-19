@@ -26,6 +26,7 @@
     "nodemailer": "^6.9.16",
     "puppeteer": "^24.7.2",
     "react-zoom-slider": "^0.1.0",
+    "sharp": "^0.35.3",
     "validator": "^13.11.0"
   }
 }

@@ -119,17 +119,19 @@ exports.createOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    //  console.log(error, "create orders error");
-
   
-    // Generate a 5-digit numeric order ID
-    const generateShortOrderId = () => {
-      return Math.floor(10000 + Math.random() * 90000).toString();
+    // Generate a unique 5-digit numeric order ID with retry
+    const generateUniqueOrderId = async () => {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const candidate = Math.floor(10000 + Math.random() * 90000).toString();
+        const exists = await Orders.findOne({ productOrderId: candidate }).lean();
+        if (!exists) return candidate;
+      }
+      // Fallback: timestamp-based
+      return Date.now().toString().slice(-5);
     };
 
-
-
-    const shortOrderId = generateShortOrderId();
+    const productOrderId = req.body.productOrderId || await generateUniqueOrderId();
     const normalizedLocationAddress = String(req.body?.locationAddress || req.body?.shippingLocation || '').trim();
     const normalizedShippingLocation = String(req.body?.shippingLocation || req.body?.locationAddress || '').trim();
     const normalizedPhoneNumber = normalizeOrderPhone(req.body?.phoneNumber);
@@ -142,31 +144,22 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    const newOrderData = new Orders({
-      ...req.body,
-      locationAddress: normalizedLocationAddress,
-      shippingLocation: normalizedShippingLocation,
-      phoneNumber: normalizedPhoneNumber,
-    });
-
     const outOfStockProducts = [];
 
-    // Update product stockQuantity based on the order
+    // Atomic stock decrement — prevents race conditions
     for (const product of req.body.products) {
       const { productId, quantity } = product;
-      console.log(product, quantity, "++++");
-      
-      const productData = await Product.findById(productId).session(session);
 
-      if (!productData) {
-        await session.abortTransaction();
-        session.endSession();
-        return res
-          .status(404)
-          .json({ error: `Product with ID ${productId} not found` });
-      }
+      const result = await Product.findOneAndUpdate(
+        { _id: productId, stockQuantity: { $gte: quantity } },
+        {
+          $inc: { stockQuantity: -quantity, totalSales: quantity },
+          $set: { lastSoldAt: new Date() },
+        },
+        { session, new: true }
+      );
 
-      if (productData.stockQuantity < quantity) {
+      if (!result) {
         await session.abortTransaction();
         session.endSession();
         return res
@@ -174,24 +167,43 @@ exports.createOrder = async (req, res) => {
           .json({ error: `Not enough stock for product ${productId}` });
       }
 
-      // Store previous stock quantity to check if product becomes out of stock
-      const previousStock = productData.stockQuantity;
-      
-      productData.stockQuantity -= quantity;
-      productData.totalSales += quantity;
-      productData.lastSoldAt = new Date();
-      
-      await productData.save({ session });
-
-      // Check if product becomes out of stock after this order
-      if (previousStock > 0 && productData.stockQuantity === 0) {
+      // Check if product became out of stock
+      if (result.stockQuantity === 0) {
         outOfStockProducts.push({
-          ...productData.toObject(),
-          previousStock,
-          orderedQuantity: quantity
+          ...result.toObject(),
+          previousStock: result.stockQuantity + quantity,
+          orderedQuantity: quantity,
         });
       }
     }
+
+    const newOrderData = new Orders({
+      userId: req.body.userId,
+      email: req.body.email,
+      fullName: req.body.fullName,
+      isGuestCheckout: req.body.isGuestCheckout,
+      products: req.body.products,
+      giftBoxCharge: req.body.giftBoxCharge,
+      isRedZone: req.body.isRedZone,
+      includeGiftBox: req.body.includeGiftBox,
+      deliveryTimeMessage: req.body.deliveryTimeMessage,
+      deliveryPartnerPrice: req.body.deliveryPartnerPrice,
+      orderedBefore12PM: req.body.orderedBefore12PM,
+      OrderedAt: req.body.OrderedAt,
+      latitude: req.body.latitude,
+      longitude: req.body.longitude,
+      locationAddress: normalizedLocationAddress,
+      isInsideValley: req.body.isInsideValley,
+      productOrderId,
+      shippingPrice: req.body.shippingPrice,
+      totalAmount: req.body.totalAmount,
+      phoneNumber: normalizedPhoneNumber,
+      isHomeDelivery: req.body.isHomeDelivery,
+      shippingLocation: normalizedShippingLocation,
+      paymentMethod: req.body.paymentMethod,
+      orderNote: req.body.orderNote,
+      deliveryPartner: req.body.deliveryPartner,
+    });
 
     const createOrderedData = await newOrderData.save({ session });
     

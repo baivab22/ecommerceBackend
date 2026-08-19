@@ -20,7 +20,9 @@ exports.createShopByBudget = async (req, res, next) => {
     //   message: "successfully created shopBy Budget",
     //   data: shopByBudgetData,
     // });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error creating shop by budget", error: error.message });
+  }
 };
 
 exports.deleteShopByBudget = async (req, res, next) => {
@@ -28,17 +30,16 @@ exports.deleteShopByBudget = async (req, res, next) => {
     const deleteShopByBudgetData = await ShopByBudget.deleteOne(
       {
         _id: req.params.shopByBudgetId,
-      },
-      {
-        new: true,
       }
     );
 
-    res.status(201).json({
+    res.status(200).json({
       message: "success fully deleted shop by budget",
       data: deleteShopByBudgetData,
     });
-  } catch (error) {}
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting shop by budget", error: error.message });
+  }
 };
 
 // exports.updateShopByBudget = async (req, res, next) => {
@@ -59,8 +60,12 @@ exports.deleteShopByBudget = async (req, res, next) => {
 // };
 
 exports.getAllShopByBudget = async (req, res, next) => {
-  const data = await ShopByBudget.find();
-  res
-    .status(201)
-    .json({ message: "success fully get Shop By Budget", data: data });
+  try {
+    const data = await ShopByBudget.find();
+    res
+      .status(200)
+      .json({ message: "success fully get Shop By Budget", data: data });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching shop by budget", error: error.message });
+  }
 };
