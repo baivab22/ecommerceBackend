@@ -5,6 +5,10 @@ const testimonialSchema = new mongoose.Schema({
     type: [String],
   },
   testimonialDescription: String,
+  testimonialBy: {
+    type: String,
+    default: '',
+  },
 });
 
 module.exports = mongoose.model("Testimonial", testimonialSchema);

@@ -2,7 +2,7 @@ const Testimonial = require("../modals/testimonial.modal");
 
 exports.updatedTestimonial = async (req, res) => {
   try {
-    const { testimonialDescription } = req.body;
+    const { testimonialDescription, testimonialBy } = req.body;
     const testimonialId = req.params.testimonialId;
 
     console.log("Incoming body:", req.body);
@@ -16,7 +16,8 @@ exports.updatedTestimonial = async (req, res) => {
 
     // Build update object dynamically
     const updateFields = {};
-    if (testimonialDescription) updateFields.testimonialDescription = testimonialDescription;
+    if (testimonialDescription !== undefined) updateFields.testimonialDescription = testimonialDescription;
+    if (testimonialBy !== undefined) updateFields.testimonialBy = testimonialBy;
     if (testimonialImage.length > 0) updateFields.testimonialImage = testimonialImage;
 
     const updatedTestimonial = await Testimonial.findByIdAndUpdate(
@@ -50,6 +51,7 @@ exports.createTestimonial = async (req, res, next) => {
     const testimonial = new Testimonial({
       testimonialImage: fileNames,
       testimonialDescription: req.body.testimonialDescription,
+      testimonialBy: req.body.testimonialBy || '',
     });
 
     const datas = await testimonial.save();
