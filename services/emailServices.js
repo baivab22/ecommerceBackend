@@ -391,6 +391,53 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
     const subject = `Order Confirmed - ${orderId}`;
 
+    // Generate invoice PNG BEFORE building email content
+    let finalInvoicePng = null;
+    try {
+      const invoicePng = await generateInvoicePngBuffer({
+        order,
+        customerEmail,
+        customerName,
+        senderEmail: EMAIL_CONFIG.sender,
+        title: 'Order Confirmation',
+      });
+
+      if (!invoicePng) {
+        const fallbackPng = await generateInvoicePngFromSvgBuffer({
+          order,
+          customerEmail,
+          customerName,
+          senderEmail: EMAIL_CONFIG.sender,
+          title: 'Order Confirmation',
+        });
+        finalInvoicePng = fallbackPng;
+      } else {
+        finalInvoicePng = invoicePng;
+      }
+    } catch (invoiceError) {
+      console.error('Invoice generation error for order confirmation:', orderId, invoiceError?.message || invoiceError);
+    }
+
+    if (!finalInvoicePng) {
+      console.error('Unable to generate invoice PNG for order:', orderId, '- sending without attachment');
+    }
+
+    // Include attachment note only when the invoice was actually generated
+    const invoiceNoteHtml = finalInvoicePng
+      ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
+      : '';
+    const invoiceNoteText = finalInvoicePng
+      ? 'We have attached your order invoice to this email for your records.\n'
+      : '';
+
+    const attachment = finalInvoicePng
+      ? [{
+          filename: `invoice-${orderId}.png`,
+          content: finalInvoicePng,
+          contentType: 'image/png',
+        }]
+      : [];
+
     const html = `
       <!DOCTYPE html>
       <html lang="en">
@@ -416,9 +463,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
                 <p style="margin:4px 0;font-size:14px;"><strong>Address:</strong> ${shippingLocation}</p>
               </div>
 
-              <p style="font-size:14px;line-height:1.6;margin:16px 0;">
-                We have attached your order invoice to this email for your records.
-              </p>
+              ${invoiceNoteHtml}
               <p style="font-size:14px;line-height:1.6;margin:16px 0;">
                 If you need any help, please contact us at ${EMAIL_CONFIG.sender}.
               </p>
@@ -444,44 +489,10 @@ Delivery Type: ${deliveryType}
 Delivery Partner: ${deliveryPartner}
 Address: ${shippingLocation}
 
-We have attached your order invoice to this email for your records.
-
-If you need help, contact us at ${EMAIL_CONFIG.sender}.
+${invoiceNoteText}If you need help, contact us at ${EMAIL_CONFIG.sender}.
 
 Thank you for shopping with Aabhushan Gallery.
 ${buildFooterText()}`;
-
-    const invoicePng = await generateInvoicePngBuffer({
-      order,
-      customerEmail,
-      customerName,
-      senderEmail: EMAIL_CONFIG.sender,
-      title: 'Order Confirmation',
-    });
-
-    const fallbackPng = invoicePng
-      ? null
-      : await generateInvoicePngFromSvgBuffer({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Confirmation',
-        });
-
-    const finalInvoicePng = invoicePng || fallbackPng;
-
-    const attachment = finalInvoicePng
-      ? [{
-          filename: `invoice-${orderId}.png`,
-          content: finalInvoicePng,
-          contentType: 'image/png',
-        }]
-      : [];
-
-    if (!finalInvoicePng) {
-      console.error('Unable to generate invoice PNG for order:', orderId, '- sending without attachment');
-    }
 
     const headers = buildCommonHeaders({ to: customerEmail, subject });
 
@@ -496,7 +507,7 @@ ${buildFooterText()}`;
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId);
+    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId, finalInvoicePng ? '(with invoice)' : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order confirmation email:', error?.message || error);
@@ -541,6 +552,53 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
       .join('');
 
     const subject = `Order Received - ${orderId}`;
+
+    // Generate invoice PNG BEFORE building email content
+    let finalInvoicePng = null;
+    try {
+      const invoicePng = await generateInvoicePngBuffer({
+        order,
+        customerEmail,
+        customerName,
+        senderEmail: EMAIL_CONFIG.sender,
+        title: 'Order Invoice',
+      });
+
+      if (!invoicePng) {
+        const fallbackPng = await generateInvoicePngFromSvgBuffer({
+          order,
+          customerEmail,
+          customerName,
+          senderEmail: EMAIL_CONFIG.sender,
+          title: 'Order Invoice',
+        });
+        finalInvoicePng = fallbackPng;
+      } else {
+        finalInvoicePng = invoicePng;
+      }
+    } catch (invoiceError) {
+      console.error('Invoice generation error for order placed confirmation:', orderId, invoiceError?.message || invoiceError);
+    }
+
+    if (!finalInvoicePng) {
+      console.error('Unable to generate invoice PNG for order placed confirmation:', orderId);
+    }
+
+    // Include attachment note only when the invoice was actually generated
+    const invoiceNoteHtml = finalInvoicePng
+      ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
+      : '';
+    const invoiceNoteText = finalInvoicePng
+      ? 'We have attached your order invoice to this email for your records.\n'
+      : '';
+
+    const attachment = finalInvoicePng
+      ? [{
+          filename: `invoice-${orderId}.png`,
+          content: finalInvoicePng,
+          contentType: 'image/png',
+        }]
+      : [];
 
     const html = `
       <!DOCTYPE html>
@@ -589,9 +647,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
                 <p style="margin:8px 0;text-align:right;font-size:17px;font-weight:700;color:#0369a1;"><strong>Grand Total:</strong> ${formatCurrency(totalAmount)}</p>
               </div>
 
-              <p style="font-size:14px;line-height:1.6;margin:16px 0;">
-                We have attached your order invoice to this email for your records.
-              </p>
+              ${invoiceNoteHtml}
               <p style="font-size:14px;line-height:1.6;margin:16px 0;">
                 If you have any questions, please contact us at ${EMAIL_CONFIG.sender}.
               </p>
@@ -623,44 +679,10 @@ Subtotal: ${formatCurrency(subtotal)}
 Shipping: ${formatCurrency(shippingPrice)}
 ${giftBoxCharge > 0 ? `Gift Box: ${formatCurrency(giftBoxCharge)}\n` : ''}Grand Total: ${formatCurrency(totalAmount)}
 
-We have attached your order invoice to this email for your records.
-
-If you have any questions, contact us at ${EMAIL_CONFIG.sender}.
+${invoiceNoteText}If you have any questions, contact us at ${EMAIL_CONFIG.sender}.
 
 Thank you for shopping with Aabhushan Gallery.
 ${buildFooterText()}`;
-
-    const invoicePng = await generateInvoicePngBuffer({
-      order,
-      customerEmail,
-      customerName,
-      senderEmail: EMAIL_CONFIG.sender,
-      title: 'Order Invoice',
-    });
-
-    const fallbackPng = invoicePng
-      ? null
-      : await generateInvoicePngFromSvgBuffer({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Invoice',
-        });
-
-    const finalInvoicePng = invoicePng || fallbackPng;
-
-    const attachment = finalInvoicePng
-      ? [{
-          filename: `invoice-${orderId}.png`,
-          content: finalInvoicePng,
-          contentType: 'image/png',
-        }]
-      : [];
-
-    if (!finalInvoicePng) {
-      console.error('Unable to generate invoice PNG for order placed confirmation:', orderId);
-    }
 
     const headers = buildCommonHeaders({ to: customerEmail, subject });
 
@@ -675,7 +697,7 @@ ${buildFooterText()}`;
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId);
+    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId, finalInvoicePng ? '(with invoice)' : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order placed confirmation email:', error?.message || error);
