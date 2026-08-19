@@ -1,5 +1,5 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
-const { transporter, EMAIL_CONFIG } = require("./mailConfig");
+const { transporter, EMAIL_CONFIG, buildCommonHeaders } = require("./mailConfig");
 const { getLogoAttachment, buildEmailShell } = require('./emailTemplate');
 
 const formatCurrency = (value) => {
@@ -16,7 +16,6 @@ const normalizePhoneNumber = (phoneNumber) => {
   if (!digitsOnly) return null;
   if (raw.startsWith("+")) return `+${digitsOnly}`;
 
-  // Nepal local formats: 98XXXXXXXX or 0XXXXXXXXX
   if (digitsOnly.length === 10 && digitsOnly.startsWith("9")) {
     return `+977${digitsOnly}`;
   }
@@ -25,7 +24,6 @@ const normalizePhoneNumber = (phoneNumber) => {
     return `+977${digitsOnly.slice(1)}`;
   }
 
-  // Fallback: return as international-ish format.
   return `+${digitsOnly}`;
 };
 
@@ -62,16 +60,16 @@ const sendDeliveryDispatchEmail = async (order) => {
       const quantity = Number(item?.quantity) || 0;
       const lineTotal = Number(item?.price) || 0;
       return `<tr>
-        <td style="padding:8px;border-bottom:1px solid #eee;">${productName}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${quantity}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${formatCurrency(lineTotal)}</td>
+        <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${productName}</td>
+        <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${quantity}</td>
+        <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:right;">${formatCurrency(lineTotal)}</td>
       </tr>`;
     })
     .join("");
 
   const shippingPrice = formatCurrency(order?.shippingPrice);
   const giftBoxCharge = formatCurrency(order?.giftBoxCharge);
-  const emailSubject = `Order Update: Your order ${orderId} is dispatched to delivery partner`;
+  const emailSubject = `Order ${orderId} Dispatched to ${deliveryPartner}`;
 
   const emailBody = `
     <p>Dear ${customerName},</p>
@@ -80,37 +78,55 @@ const sendDeliveryDispatchEmail = async (order) => {
       Please find the details below.
     </p>
 
-    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:12px 0;">
-      <p style="margin:4px 0;"><strong>Order ID:</strong> ${orderId}</p>
-      <p style="margin:4px 0;"><strong>Dispatch Time:</strong> ${scannedAt}</p>
-      <p style="margin:4px 0;"><strong>Delivery Partner:</strong> ${deliveryPartner}</p>
-      <p style="margin:4px 0;"><strong>Total Amount:</strong> ${totalAmount}</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:16px 0;">
+      <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;">${orderId}</span></p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Dispatch Time:</strong> ${scannedAt}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Delivery Partner:</strong> ${deliveryPartner}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Total Amount:</strong> ${totalAmount}</p>
     </div>
 
-    <h3 style="margin:16px 0 8px;">Order Summary</h3>
-    <table style="width:100%; border-collapse:collapse; font-size:14px;">
+    <h3 style="margin:16px 0 8px;font-size:16px;color:#374151;">Order Summary</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;">
       <thead>
         <tr style="background:#f1f5f9;">
-          <th style="padding:8px; text-align:left; border-bottom:1px solid #ddd;">Product</th>
-          <th style="padding:8px; text-align:center; border-bottom:1px solid #ddd;">Qty</th>
-          <th style="padding:8px; text-align:right; border-bottom:1px solid #ddd;">Line Total</th>
+          <th style="padding:10px;text-align:left;border-bottom:1px solid #e2e8f0;">Product</th>
+          <th style="padding:10px;text-align:center;border-bottom:1px solid #e2e8f0;">Qty</th>
+          <th style="padding:10px;text-align:right;border-bottom:1px solid #e2e8f0;">Line Total</th>
         </tr>
       </thead>
       <tbody>
-        ${productRows || "<tr><td colspan='3' style='padding:8px;'>No product lines available</td></tr>"}
+        ${productRows || "<tr><td colspan='3' style='padding:10px;text-align:center;color:#6b7280;'>No product lines available</td></tr>"}
       </tbody>
     </table>
 
-    <div style="margin-top:14px; font-size:14px;">
-      <p style="margin:2px 0;"><strong>Shipping Charge:</strong> ${shippingPrice}</p>
-      <p style="margin:2px 0;"><strong>Gift Box Charge:</strong> ${giftBoxCharge}</p>
-      <p style="margin:6px 0;"><strong>Final Total:</strong> ${totalAmount}</p>
+    <div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;font-size:14px;">
+      <p style="margin:4px 0;"><strong>Shipping Charge:</strong> ${shippingPrice}</p>
+      <p style="margin:4px 0;"><strong>Gift Box Charge:</strong> ${giftBoxCharge}</p>
+      <p style="margin:8px 0;font-size:16px;font-weight:700;"><strong>Final Total:</strong> ${totalAmount}</p>
     </div>
 
-    <p style="margin-top:16px;">
-      If you have any questions, please contact our support team.
+    <p style="margin-top:16px;font-size:14px;line-height:1.6;">
+      If you have any questions, please contact our support team at ${EMAIL_CONFIG.sender}.
     </p>
   `;
+
+  const textBody = `Dear ${customerName},
+
+Your order has been dispatched to our delivery partner.
+
+Order ID: ${orderId}
+Dispatch Time: ${scannedAt}
+Delivery Partner: ${deliveryPartner}
+Total Amount: ${totalAmount}
+
+Products:
+${(order?.products || []).map(item => `- ${item?.productId?.name || 'Product'} (x${item?.quantity || 0}) - ${formatCurrency(item?.price || 0)}`).join('\n')}
+
+Shipping: ${shippingPrice}
+Gift Box: ${giftBoxCharge}
+Final Total: ${totalAmount}
+
+If you have questions, contact us at ${EMAIL_CONFIG.sender}.`;
 
   const mailOptions = {
     from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -125,6 +141,9 @@ const sendDeliveryDispatchEmail = async (order) => {
       contactPhone: '9861698400',
       contactEmail: EMAIL_CONFIG.sender,
     }),
+    text: textBody,
+    headers: buildCommonHeaders({ to: customerEmail, subject: emailSubject }),
+    replyTo: EMAIL_CONFIG.sender,
     attachments: getLogoAttachment(),
   };
 
@@ -244,21 +263,34 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
   const orderId = order?.productOrderId || order?._id || 'N/A';
   const currentTotal = formatCurrency(order?.totalAmount);
 
-  const emailSubject = `Delivery Update: Order ${orderId} is now ${newStatus}`;
+  const emailSubject = `Delivery Update: Order ${orderId} - ${newStatus}`;
   const emailBody = `
     <p>Dear ${customerName},</p>
     <p>Your delivery status has been updated.</p>
 
-    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:12px 0;">
-      <p style="margin:4px 0;"><strong>Order Reference:</strong> ${orderId}</p>
-      <p style="margin:4px 0;"><strong>Previous Status:</strong> ${previousStatus}</p>
-      <p style="margin:4px 0;"><strong>Current Status:</strong> ${newStatus}</p>
-      <p style="margin:4px 0;"><strong>Status Time:</strong> ${statusTimeLabel}</p>
-      <p style="margin:4px 0;"><strong>Order Total:</strong> ${currentTotal}</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:16px 0;">
+      <p style="margin:4px 0;font-size:14px;"><strong>Order Reference:</strong> ${orderId}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Previous Status:</strong> ${previousStatus}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Current Status:</strong> ${newStatus}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Status Time:</strong> ${statusTimeLabel}</p>
+      <p style="margin:4px 0;font-size:14px;"><strong>Order Total:</strong> ${currentTotal}</p>
     </div>
 
-    <p>We will continue to share updates until your package is delivered.</p>
+    <p style="font-size:14px;line-height:1.6;">We will continue to share updates until your package is delivered.</p>
   `;
+
+  const textBody = `Dear ${customerName},
+
+Your delivery status has been updated.
+
+Order Reference: ${orderId}
+Previous Status: ${previousStatus}
+Current Status: ${newStatus}
+Status Time: ${statusTimeLabel}
+Order Total: ${currentTotal}
+
+We will continue to share updates until your package is delivered.
+Contact us at ${EMAIL_CONFIG.sender} if you have questions.`;
 
   const mailOptions = {
     from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -273,6 +305,9 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
       contactPhone: '9861698400',
       contactEmail: EMAIL_CONFIG.sender,
     }),
+    text: textBody,
+    headers: buildCommonHeaders({ to: customerEmail, subject: emailSubject }),
+    replyTo: EMAIL_CONFIG.sender,
     attachments: getLogoAttachment(),
   };
 

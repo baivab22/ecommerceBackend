@@ -6,21 +6,20 @@ const {
   sendCompleteOutOfStockReport,
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
+  sendOrderPlacedConfirmationToCustomer,
 } = require("../services/emailServices");
 
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
 const generateCompactOrderId = () => {
-  // Deprecated: not used for new orders, but keep for legacy normalization
-  return Math.floor(10000 + Math.random() * 90000).toString();
+  return `ord-${Date.now()}`;
 };
 
 const normalizeProductOrderId = (incoming) => {
   const value = String(incoming || '').trim();
-  // Accept only 5-digit numbers
-  if (/^\d{5}$/.test(value)) {
-    return value;
-  }
+  if (!value) return generateCompactOrderId();
+  if (/^ord-\d+$/.test(value)) return value;
+  if (/^\d{5}$/.test(value)) return `ord-${value}`;
   return generateCompactOrderId();
 };
 
@@ -120,15 +119,13 @@ exports.createOrder = async (req, res) => {
 
   try {
   
-    // Generate a unique 5-digit numeric order ID with retry
     const generateUniqueOrderId = async () => {
       for (let attempt = 0; attempt < 10; attempt++) {
-        const candidate = Math.floor(10000 + Math.random() * 90000).toString();
+        const candidate = `ord-${Date.now()}-${attempt}`;
         const exists = await Orders.findOne({ productOrderId: candidate }).lean();
         if (!exists) return candidate;
       }
-      // Fallback: timestamp-based
-      return Date.now().toString().slice(-5);
+      return `ord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     };
 
     const productOrderId = req.body.productOrderId || await generateUniqueOrderId();
@@ -233,12 +230,31 @@ exports.createOrder = async (req, res) => {
         .populate('userId')
         .populate('products.productId');
 
+      console.log('Attempting to send admin notification email for order:', createOrderedData.productOrderId);
       const sent = await sendNewOrderPlacedNotification(enrichedOrderForEmail || createOrderedData);
       if (!sent) {
-        console.error("Admin new-order email was not sent for order", createOrderedData?._id);
+        console.error("Admin new-order email was NOT sent for order", createOrderedData?.productOrderId);
+      } else {
+        console.log('Admin notification email sent successfully for order:', createOrderedData.productOrderId);
       }
     } catch (adminEmailError) {
-      console.error('Failed to send order notification emails:', adminEmailError);
+      console.error('Failed to send admin order notification email:', adminEmailError?.message || adminEmailError);
+    }
+
+    // Send order received confirmation email to customer with invoice (non-blocking).
+    try {
+      const enrichedOrderForCustomer = await Orders.findById(createOrderedData._id)
+        .populate('userId')
+        .populate('products.productId');
+
+      const customerSent = await sendOrderPlacedConfirmationToCustomer(enrichedOrderForCustomer || createOrderedData);
+      if (!customerSent) {
+        console.error("Customer order placed confirmation email was not sent for order", createOrderedData?.productOrderId);
+      } else {
+        console.log('Customer order placed confirmation email sent for order:', createOrderedData.productOrderId);
+      }
+    } catch (customerEmailError) {
+      console.error('Failed to send customer order placed confirmation email:', customerEmailError?.message || customerEmailError);
     }
 
     console.log(createOrderedData, "created order data");
