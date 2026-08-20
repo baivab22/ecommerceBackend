@@ -255,6 +255,12 @@ const sendNewOrderPlacedNotification = async (order) => {
     const userPhone = order?.userId?.phone || phoneNumber || "N/A";
     const userId = typeof order?.userId === "object" ? order?.userId?._id : order?.userId;
 
+    const deliveryType = order?.isHomeDelivery ? "Home Delivery" : "Store Pickup";
+    const deliveryZone = order?.isInsideValley ? "Inside Valley" : "Outside Valley";
+    const deliveryArea = order?.isRedZone ? "Red Zone" : "Standard Zone";
+    const deliveryPartner = order?.deliveryPartner || "To be assigned";
+    const deliveryTime = order?.deliveryTimeMessage || "To be confirmed";
+
     let subtotal = 0;
     const productsHtml = (order?.products || [])
       .map((item, index) => {
@@ -267,14 +273,14 @@ const sendNewOrderPlacedNotification = async (order) => {
         const unitPrice = quantity > 0 ? linePrice / quantity : linePrice;
         return `
           <tr>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${index + 1}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;">
               <div style="font-weight:600;color:#111827;">${productName}</div>
             </td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${colorName}</td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${quantity}</td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:right;">${formatCurrency(unitPrice)}</td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600;">${formatCurrency(linePrice)}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${colorName}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${quantity}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">${formatCurrency(unitPrice)}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">${formatCurrency(linePrice)}</td>
           </tr>
         `;
       })
@@ -286,37 +292,59 @@ const sendNewOrderPlacedNotification = async (order) => {
       <!DOCTYPE html>
       <html lang="en">
       <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-      <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      <body style="margin:0;padding:0;background:#f3f4f6;font-family:'DM Sans',Arial,Helvetica,sans-serif;color:#111827;">
         <div style="padding:28px 12px;">
           <div style="max-width:760px;margin:0 auto;background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:hidden;">
-            <div style="padding:24px 22px 16px;background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%);text-align:center;border-bottom:1px solid #bbf7d0;">
-              <h1 style="margin:0;font-size:22px;color:#166534;">New Order Notification</h1>
-              <p style="margin:6px 0 0;font-size:14px;color:#6b7280;">A new order has been placed successfully.</p>
+            <div style="padding:28px 24px 18px;background:#111827;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#ffffff;font-weight:700;letter-spacing:0.5px;">New Order Notification</h1>
+              <p style="margin:8px 0 0;font-size:14px;color:#9ca3af;">A new order has been placed successfully</p>
             </div>
             <div style="padding:24px 22px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:20px;">
-                <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#0f766e;">${orderId}</span></p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Ordered At:</strong> ${orderedAt}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Customer:</strong> ${userName}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Email:</strong> ${userEmail}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Phone:</strong> ${userPhone}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Shipping:</strong> ${shippingLocation}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Delivery:</strong> ${order?.isHomeDelivery ? "Home Delivery" : "Store Pickup"}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Valley:</strong> ${order?.isInsideValley ? "Inside" : "Outside"}</p>
-                ${order?.orderNote ? `<p style="margin:4px 0;font-size:14px;"><strong>Note:</strong> ${order.orderNote}</p>` : ''}
+
+              <!-- Order Overview -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:20px;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Order Details</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#2563eb;font-weight:700;">${orderId}</span></p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Ordered At:</strong> ${orderedAt}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> <span style="color:#166534;font-weight:700;font-size:15px;">${formatCurrency(totalAmount)}</span></p>
+                </div>
               </div>
 
+              <!-- Customer Info -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:20px;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Customer Information</h3>
+                <p style="margin:4px 0;font-size:14px;"><strong>Name:</strong> ${userName}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Email:</strong> ${userEmail}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Phone:</strong> ${userPhone}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>User ID:</strong> <span style="font-family:monospace;font-size:12px;color:#6b7280;">${userId || 'N/A'}</span></p>
+              </div>
+
+              <!-- Delivery Info -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:20px;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Delivery Information</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <p style="margin:4px 0;font-size:14px;"><strong>Type:</strong> ${deliveryType}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Zone:</strong> ${deliveryZone}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Area:</strong> ${deliveryArea}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Partner:</strong> ${deliveryPartner}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Est. Delivery:</strong> ${deliveryTime}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Ship To:</strong> ${shippingLocation}</p>
+                </div>
+              </div>
+
+              <!-- Products -->
               <h2 style="margin:0 0 10px;font-size:16px;color:#374151;">Ordered Products</h2>
-              <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
                 <thead>
-                  <tr style="background:#f1f5f9;">
-                    <th style="padding:10px;text-align:left;border-bottom:1px solid #e2e8f0;">#</th>
-                    <th style="padding:10px;text-align:left;border-bottom:1px solid #e2e8f0;">Product</th>
-                    <th style="padding:10px;text-align:center;border-bottom:1px solid #e2e8f0;">Color</th>
-                    <th style="padding:10px;text-align:center;border-bottom:1px solid #e2e8f0;">Qty</th>
-                    <th style="padding:10px;text-align:right;border-bottom:1px solid #e2e8f0;">Unit Price</th>
-                    <th style="padding:10px;text-align:right;border-bottom:1px solid #e2e8f0;">Total</th>
+                  <tr style="background:#111827;">
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">#</th>
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Product</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Color</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Qty</th>
+                    <th style="padding:10px;text-align:right;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Unit Price</th>
+                    <th style="padding:10px;text-align:right;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -324,12 +352,30 @@ const sendNewOrderPlacedNotification = async (order) => {
                 </tbody>
               </table>
 
-              <div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">
-                <p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Subtotal:</strong> ${formatCurrency(subtotal)}</p>
-                <p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Shipping:</strong> ${formatCurrency(shippingPrice)}</p>
-                <p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Gift Box:</strong> ${formatCurrency(giftBoxCharge)}</p>
-                <p style="margin:8px 0;text-align:right;font-size:17px;font-weight:700;color:#0f766e;"><strong>Grand Total:</strong> ${formatCurrency(totalAmount)}</p>
+              <!-- Summary -->
+              <div style="margin-top:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;">
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Subtotal</span><span style="font-weight:600;color:#374151;">${formatCurrency(subtotal)}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Shipping</span><span style="font-weight:600;color:#374151;">${formatCurrency(shippingPrice)}</span>
+                </div>
+                ${giftBoxCharge > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Gift Box</span><span style="font-weight:600;color:#374151;">${formatCurrency(giftBoxCharge)}</span>
+                </div>` : ''}
+                <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:6px;border-top:2px solid #111827;font-size:17px;">
+                  <span style="font-weight:700;color:#111827;">Grand Total</span>
+                  <span style="font-weight:800;color:#166534;">${formatCurrency(totalAmount)}</span>
+                </div>
               </div>
+
+              ${order?.orderNote ? `
+              <!-- Order Note -->
+              <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;margin-top:16px;">
+                <h4 style="margin:0 0 6px;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Order Note</h4>
+                <p style="margin:0;font-size:13px;color:#78350f;line-height:1.5;">${order.orderNote}</p>
+              </div>
+              ` : ''}
             </div>
             ${buildFooterHtml()}
           </div>
@@ -340,22 +386,33 @@ const sendNewOrderPlacedNotification = async (order) => {
 
     const text = `New Order Placed - ${orderId}
 
+ORDER DETAILS
 Order ID: ${orderId}
 Ordered At: ${orderedAt}
-Customer: ${userName}
+Payment: ${paymentMethod}
+Grand Total: ${formatCurrency(totalAmount)}
+
+CUSTOMER INFORMATION
+Name: ${userName}
 Email: ${userEmail}
 Phone: ${userPhone}
-Payment: ${paymentMethod}
-Shipping: ${shippingLocation}
-Delivery: ${order?.isHomeDelivery ? "Home Delivery" : "Store Pickup"}
+User ID: ${userId || 'N/A'}
 
-Products:
-${(order?.products || []).map((item, i) => `${i + 1}. ${item?.productId?.name || 'Product'} (x${item?.quantity || 0}) - ${formatCurrency(item?.price || 0)}`).join('\n')}
+DELIVERY INFORMATION
+Type: ${deliveryType}
+Zone: ${deliveryZone}
+Area: ${deliveryArea}
+Partner: ${deliveryPartner}
+Est. Delivery: ${deliveryTime}
+Ship To: ${shippingLocation}
+
+PRODUCTS:
+${(order?.products || []).map((item, i) => `${i + 1}. ${item?.productId?.name || 'Product'} (${item?.colorName || '-'}) x${item?.quantity || 0} - ${formatCurrency(item?.price || 0)}`).join('\n')}
 
 Subtotal: ${formatCurrency(subtotal)}
 Shipping: ${formatCurrency(shippingPrice)}
-Gift Box: ${formatCurrency(giftBoxCharge)}
-Grand Total: ${formatCurrency(totalAmount)}
+${giftBoxCharge > 0 ? `Gift Box: ${formatCurrency(giftBoxCharge)}\n` : ''}Grand Total: ${formatCurrency(totalAmount)}
+${order?.orderNote ? `\nOrder Note: ${order.orderNote}\n` : ''}
 ${buildFooterText()}`;
 
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: adminRecipient, subject });
@@ -393,8 +450,33 @@ const sendOrderConfirmationToCustomer = async (order) => {
     const totalAmount = Number(order?.totalAmount || 0);
     const shippingLocation = order?.shippingLocation || order?.locationAddress || 'N/A';
     const paymentMethod = order?.paymentMethod || 'N/A';
+    const shippingPrice = Number(order?.shippingPrice || 0);
+    const giftBoxCharge = Number(order?.giftBoxCharge || 0);
     const deliveryPartner = order?.deliveryPartner || 'Not assigned yet';
-    const deliveryType = order?.isHomeDelivery ? 'Home Delivery' : 'Office Delivery';
+    const deliveryType = order?.isHomeDelivery ? 'Home Delivery' : 'Store Pickup';
+    const deliveryZone = order?.isInsideValley ? 'Inside Valley' : 'Outside Valley';
+    const deliveryArea = order?.isRedZone ? 'Red Zone' : 'Standard Zone';
+    const deliveryTime = order?.deliveryTimeMessage || 'To be confirmed';
+
+    let subtotal = 0;
+    const productsHtml = (order?.products || [])
+      .map((item, index) => {
+        const productName = item?.productId?.name || 'Product';
+        const colorName = item?.colorName || '-';
+        const quantity = Number(item?.quantity || 0);
+        const linePrice = Number(item?.price || 0);
+        subtotal += linePrice;
+        return `
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${index + 1}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;font-weight:600;">${productName}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${colorName}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${quantity}</td>
+            <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">${formatCurrency(linePrice)}</td>
+          </tr>
+        `;
+      })
+      .join('');
 
     const subject = `Order Confirmed - ${orderId}`;
 
@@ -476,11 +558,12 @@ const sendOrderConfirmationToCustomer = async (order) => {
       <!DOCTYPE html>
       <html lang="en">
       <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-      <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      <body style="margin:0;padding:0;background:#f3f4f6;font-family:'DM Sans',Arial,Helvetica,sans-serif;color:#111827;">
         <div style="padding:28px 12px;">
           <div style="max-width:680px;margin:0 auto;background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:hidden;">
-            <div style="padding:24px 22px 16px;background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%);text-align:center;border-bottom:1px solid #bbf7d0;">
-              <h1 style="margin:0;font-size:22px;color:#166534;">Order Confirmed</h1>
+            <div style="padding:28px 24px 18px;background:#111827;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#ffffff;font-weight:700;">Order Confirmed</h1>
+              <p style="margin:8px 0 0;font-size:14px;color:#9ca3af;">Your order has been confirmed and is being prepared</p>
             </div>
             <div style="padding:24px 22px;">
               <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${customerName},</p>
@@ -488,13 +571,58 @@ const sendOrderConfirmationToCustomer = async (order) => {
                 Your order has been confirmed by our team and is now being prepared for delivery.
               </p>
 
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:16px 0;">
-                <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#0f766e;">${orderId}</span></p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Total:</strong> ${formatCurrency(totalAmount)}</p>
+              <!-- Order Overview -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Order Details</h3>
+                <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#2563eb;font-weight:700;">${orderId}</span></p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Delivery Type:</strong> ${deliveryType}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Delivery Partner:</strong> ${deliveryPartner}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Address:</strong> ${shippingLocation}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Shipping Address:</strong> ${shippingLocation}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> <span style="color:#166534;font-weight:700;font-size:16px;">${formatCurrency(totalAmount)}</span></p>
+              </div>
+
+              <!-- Delivery Info -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Delivery Information</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                  <p style="margin:4px 0;font-size:14px;"><strong>Type:</strong> ${deliveryType}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Zone:</strong> ${deliveryZone} · ${deliveryArea}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Partner:</strong> ${deliveryPartner}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Est. Delivery:</strong> ${deliveryTime}</p>
+                </div>
+              </div>
+
+              <!-- Products -->
+              <h2 style="margin:16px 0 8px;font-size:16px;color:#374151;">Order Items</h2>
+              <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <thead>
+                  <tr style="background:#111827;">
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">#</th>
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Product</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Color</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Qty</th>
+                    <th style="padding:10px;text-align:right;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${productsHtml}
+                </tbody>
+              </table>
+
+              <!-- Summary -->
+              <div style="margin-top:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;">
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Subtotal</span><span style="font-weight:600;color:#374151;">${formatCurrency(subtotal)}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Shipping</span><span style="font-weight:600;color:#374151;">${formatCurrency(shippingPrice)}</span>
+                </div>
+                ${giftBoxCharge > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Gift Box</span><span style="font-weight:600;color:#374151;">${formatCurrency(giftBoxCharge)}</span>
+                </div>` : ''}
+                <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:6px;border-top:2px solid #111827;font-size:17px;">
+                  <span style="font-weight:700;color:#111827;">Grand Total</span>
+                  <span style="font-weight:800;color:#166534;">${formatCurrency(totalAmount)}</span>
+                </div>
               </div>
 
               ${invoiceNoteHtml}
@@ -514,14 +642,26 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
 Dear ${customerName},
 
-Your order has been confirmed by our team and is now being prepared.
+Your order has been confirmed by our team and is now being prepared for delivery.
 
+ORDER DETAILS
 Order ID: ${orderId}
-Total: ${formatCurrency(totalAmount)}
 Payment: ${paymentMethod}
-Delivery Type: ${deliveryType}
-Delivery Partner: ${deliveryPartner}
-Address: ${shippingLocation}
+Shipping Address: ${shippingLocation}
+Grand Total: ${formatCurrency(totalAmount)}
+
+DELIVERY INFORMATION
+Type: ${deliveryType}
+Zone: ${deliveryZone} · ${deliveryArea}
+Partner: ${deliveryPartner}
+Est. Delivery: ${deliveryTime}
+
+ORDER ITEMS:
+${(order?.products || []).map((item, i) => `${i + 1}. ${item?.productId?.name || 'Product'} (${item?.colorName || '-'}) x${item?.quantity || 0} - ${formatCurrency(item?.price || 0)}`).join('\n')}
+
+Subtotal: ${formatCurrency(subtotal)}
+Shipping: ${formatCurrency(shippingPrice)}
+${giftBoxCharge > 0 ? `Gift Box: ${formatCurrency(giftBoxCharge)}\n` : ''}Grand Total: ${formatCurrency(totalAmount)}
 
 ${invoiceNoteText}If you need help, contact us at ${EMAIL_CONFIG.sender}.
 
@@ -663,15 +803,22 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
         }]
       : [];
 
+    const deliveryType = order?.isHomeDelivery ? 'Home Delivery' : 'Store Pickup';
+    const deliveryZone = order?.isInsideValley ? 'Inside Valley' : 'Outside Valley';
+    const deliveryArea = order?.isRedZone ? 'Red Zone' : 'Standard Zone';
+    const deliveryPartner = order?.deliveryPartner || 'To be assigned';
+    const deliveryTime = order?.deliveryTimeMessage || 'To be confirmed';
+
     const html = `
       <!DOCTYPE html>
       <html lang="en">
       <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-      <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      <body style="margin:0;padding:0;background:#f3f4f6;font-family:'DM Sans',Arial,Helvetica,sans-serif;color:#111827;">
         <div style="padding:28px 12px;">
           <div style="max-width:680px;margin:0 auto;background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:hidden;">
-            <div style="padding:24px 22px 16px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);text-align:center;border-bottom:1px solid #bfdbfe;">
-              <h1 style="margin:0;font-size:22px;color:#1e40af;">Order Received</h1>
+            <div style="padding:28px 24px 18px;background:#111827;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#ffffff;font-weight:700;">Order Received</h1>
+              <p style="margin:8px 0 0;font-size:14px;color:#9ca3af;">Thank you for your order!</p>
             </div>
             <div style="padding:24px 22px;">
               <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${customerName},</p>
@@ -680,22 +827,36 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
                 You will receive another confirmation email once your order is approved.
               </p>
 
-              <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:16px;margin:16px 0;">
-                <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#0369a1;">${orderId}</span></p>
+              <!-- Order Overview -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Order Details</h3>
+                <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#2563eb;font-weight:700;">${orderId}</span></p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Address:</strong> ${shippingLocation}</p>
-                <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> ${formatCurrency(totalAmount)}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Shipping Address:</strong> ${shippingLocation}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> <span style="color:#166534;font-weight:700;font-size:16px;">${formatCurrency(totalAmount)}</span></p>
               </div>
 
+              <!-- Delivery Info -->
+              <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
+                <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Delivery Information</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                  <p style="margin:4px 0;font-size:14px;"><strong>Type:</strong> ${deliveryType}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Zone:</strong> ${deliveryZone} · ${deliveryArea}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Partner:</strong> ${deliveryPartner}</p>
+                  <p style="margin:4px 0;font-size:14px;"><strong>Est. Delivery:</strong> ${deliveryTime}</p>
+                </div>
+              </div>
+
+              <!-- Products -->
               <h2 style="margin:16px 0 8px;font-size:16px;color:#374151;">Order Summary</h2>
-              <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
                 <thead>
-                  <tr style="background:#f1f5f9;">
-                    <th style="padding:10px;text-align:left;border-bottom:1px solid #e2e8f0;">#</th>
-                    <th style="padding:10px;text-align:left;border-bottom:1px solid #e2e8f0;">Product</th>
-                    <th style="padding:10px;text-align:center;border-bottom:1px solid #e2e8f0;">Color</th>
-                    <th style="padding:10px;text-align:center;border-bottom:1px solid #e2e8f0;">Qty</th>
-                    <th style="padding:10px;text-align:right;border-bottom:1px solid #e2e8f0;">Amount</th>
+                  <tr style="background:#111827;">
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">#</th>
+                    <th style="padding:10px;text-align:left;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Product</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Color</th>
+                    <th style="padding:10px;text-align:center;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Qty</th>
+                    <th style="padding:10px;text-align:right;color:#ffffff;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -703,11 +864,21 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
                 </tbody>
               </table>
 
-              <div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">
-                <p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Subtotal:</strong> ${formatCurrency(subtotal)}</p>
-                <p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Shipping:</strong> ${formatCurrency(shippingPrice)}</p>
-                ${giftBoxCharge > 0 ? `<p style="margin:4px 0;text-align:right;font-size:14px;"><strong>Gift Box:</strong> ${formatCurrency(giftBoxCharge)}</p>` : ''}
-                <p style="margin:8px 0;text-align:right;font-size:17px;font-weight:700;color:#0369a1;"><strong>Grand Total:</strong> ${formatCurrency(totalAmount)}</p>
+              <!-- Summary -->
+              <div style="margin-top:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;">
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Subtotal</span><span style="font-weight:600;color:#374151;">${formatCurrency(subtotal)}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Shipping</span><span style="font-weight:600;color:#374151;">${formatCurrency(shippingPrice)}</span>
+                </div>
+                ${giftBoxCharge > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
+                  <span>Gift Box</span><span style="font-weight:600;color:#374151;">${formatCurrency(giftBoxCharge)}</span>
+                </div>` : ''}
+                <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:6px;border-top:2px solid #111827;font-size:17px;">
+                  <span style="font-weight:700;color:#111827;">Grand Total</span>
+                  <span style="font-weight:800;color:#166534;">${formatCurrency(totalAmount)}</span>
+                </div>
               </div>
 
               ${invoiceNoteHtml}
@@ -730,12 +901,19 @@ Dear ${customerName},
 Thank you for your order! We have received your order and it is now being reviewed.
 You will receive another confirmation email once your order is approved.
 
+ORDER DETAILS
 Order ID: ${orderId}
 Payment: ${paymentMethod}
-Address: ${shippingLocation}
+Shipping Address: ${shippingLocation}
 Grand Total: ${formatCurrency(totalAmount)}
 
-Order Summary:
+DELIVERY INFORMATION
+Type: ${deliveryType}
+Zone: ${deliveryZone} · ${deliveryArea}
+Partner: ${deliveryPartner}
+Est. Delivery: ${deliveryTime}
+
+ORDER SUMMARY:
 ${(order?.products || []).map((item, i) => `${i + 1}. ${item?.productId?.name || 'Product'} (${item?.colorName || '-'}) x${item?.quantity || 0} - ${formatCurrency(item?.price || 0)}`).join('\n')}
 
 Subtotal: ${formatCurrency(subtotal)}

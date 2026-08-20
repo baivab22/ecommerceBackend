@@ -23,6 +23,8 @@ const EMAIL_CONFIG = {
   domain: process.env.MAIL_DOMAIN || 'aabhushangallery.com',
 };
 
+const MESSAGE_ID_HASH = process.env.MAIL_DOMAIN_HASH || 'abg001';
+
 const transporter = nodemailer.createTransport({
   host: SMTP_CONFIG.host,
   port: SMTP_CONFIG.port,
@@ -40,6 +42,20 @@ const transporter = nodemailer.createTransport({
     rejectUnauthorized: true,
   },
 });
+
+// Verify SMTP connection at startup
+transporter.verify()
+  .then(() => {
+    console.log('[Mail] SMTP connection verified successfully');
+    console.log('[Mail] Sending from:', SMTP_CONFIG.fromAddress);
+  })
+  .catch((err) => {
+    console.error('[Mail] SMTP connection FAILED:', err.message);
+    console.error('[Mail] SMTP Error code:', err.code);
+    console.error('[Mail] Check that your Gmail App Password is valid and not expired');
+    console.error('[Mail] SMTP_USER:', SMTP_CONFIG.user ? 'set' : 'MISSING');
+    console.error('[Mail] SMTP_PASS:', SMTP_CONFIG.pass ? 'set' : 'MISSING');
+  });
 
 const buildCommonHeaders = ({ to, subject }) => {
   const timestamp = new Date().toISOString();
@@ -59,8 +75,6 @@ const buildCommonHeaders = ({ to, subject }) => {
     },
   };
 };
-
-const MESSAGE_ID_HASH = process.env.MAIL_DOMAIN_HASH || 'abg001';
 
 module.exports = {
   SMTP_CONFIG,
