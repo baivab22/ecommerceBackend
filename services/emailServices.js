@@ -4,6 +4,7 @@ const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePngBuffer,
   generateInvoicePngFromSvgBuffer,
+  buildInvoiceSvg,
 } = require('./invoiceRenderer.service');
 
 const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
@@ -118,7 +119,7 @@ Time: ${new Date().toLocaleString()}
 Please restock these products.
 ${buildFooterText()}`;
 
-    const headers = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
+    const { messageId, date, customHeaders } = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
 
     await transporter.sendMail({
       from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -126,7 +127,9 @@ ${buildFooterText()}`;
       subject,
       html,
       text,
-      headers,
+      messageId,
+      date,
+      headers: customHeaders,
       replyTo: EMAIL_CONFIG.sender,
     });
     console.log(`Out-of-stock notification sent for ${newOutOfStockProducts.length} new products. Total out of stock: ${allOutOfStockProducts.length}`);
@@ -207,7 +210,7 @@ ${allOutOfStockProducts.map((p, i) => `${i + 1}. ${p.name} (${p.category?.name |
 Generated: ${new Date().toLocaleString()}
 ${buildFooterText()}`;
 
-    const headers = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
+    const { messageId, date, customHeaders } = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
 
     await transporter.sendMail({
       from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -215,7 +218,9 @@ ${buildFooterText()}`;
       subject,
       html,
       text,
-      headers,
+      messageId,
+      date,
+      headers: customHeaders,
       replyTo: EMAIL_CONFIG.sender,
     });
     console.log(`Complete out-of-stock report sent. Total out of stock: ${allOutOfStockProducts.length}`);
@@ -353,7 +358,7 @@ Gift Box: ${formatCurrency(giftBoxCharge)}
 Grand Total: ${formatCurrency(totalAmount)}
 ${buildFooterText()}`;
 
-    const headers = buildCommonHeaders({ to: adminRecipient, subject });
+    const { messageId, date, customHeaders } = buildCommonHeaders({ to: adminRecipient, subject });
 
     const info = await transporter.sendMail({
       from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -361,7 +366,9 @@ ${buildFooterText()}`;
       subject,
       html,
       text,
-      headers,
+      messageId,
+      date,
+      headers: customHeaders,
       replyTo: EMAIL_CONFIG.sender,
     });
     console.log('Admin notification email sent. Message ID:', info?.messageId, 'Recipients:', adminRecipient);
@@ -391,8 +398,11 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
     const subject = `Order Confirmed - ${orderId}`;
 
-    // Generate invoice PNG BEFORE building email content
-    let finalInvoicePng = null;
+    // Generate invoice attachment: try PNG (Puppeteer) then SVG (no Puppeteer)
+    let finalInvoiceBuffer = null;
+    let finalInvoiceFilename = `invoice-${orderId}.png`;
+    let finalInvoiceContentType = 'image/png';
+
     try {
       const invoicePng = await generateInvoicePngBuffer({
         order,
@@ -402,7 +412,11 @@ const sendOrderConfirmationToCustomer = async (order) => {
         title: 'Order Confirmation',
       });
 
-      if (!invoicePng) {
+      if (invoicePng) {
+        finalInvoiceBuffer = Buffer.from(invoicePng);
+        console.log('[email] Order confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
+      } else {
+        console.log('[email] HTML PNG returned null, trying SVG→PNG fallback...');
         const fallbackPng = await generateInvoicePngFromSvgBuffer({
           order,
           customerEmail,
@@ -410,31 +424,51 @@ const sendOrderConfirmationToCustomer = async (order) => {
           senderEmail: EMAIL_CONFIG.sender,
           title: 'Order Confirmation',
         });
-        finalInvoicePng = fallbackPng;
-      } else {
-        finalInvoicePng = invoicePng;
+        if (fallbackPng) {
+          finalInvoiceBuffer = Buffer.from(fallbackPng);
+          console.log('[email] SVG→PNG fallback generated:', finalInvoiceBuffer.length, 'bytes');
+        }
       }
     } catch (invoiceError) {
-      console.error('Invoice generation error for order confirmation:', orderId, invoiceError?.message || invoiceError);
+      console.error('[email] PNG generation error for order', orderId, ':', invoiceError?.message);
     }
 
-    if (!finalInvoicePng) {
-      console.error('Unable to generate invoice PNG for order:', orderId, '- sending without attachment');
+    // Ultimate fallback: attach SVG directly (no Puppeteer required)
+    if (!finalInvoiceBuffer) {
+      try {
+        const svgString = buildInvoiceSvg({
+          order,
+          customerEmail,
+          customerName,
+          senderEmail: EMAIL_CONFIG.sender,
+          title: 'Order Confirmation',
+        });
+        finalInvoiceBuffer = Buffer.from(svgString, 'utf8');
+        finalInvoiceFilename = `invoice-${orderId}.svg`;
+        finalInvoiceContentType = 'image/svg+xml';
+        console.log('[email] SVG-only fallback attached:', finalInvoiceBuffer.length, 'bytes');
+      } catch (svgError) {
+        console.error('[email] SVG generation also failed for order', orderId, ':', svgError?.message);
+      }
+    }
+
+    if (!finalInvoiceBuffer) {
+      console.error('[email] All invoice generation methods failed for order:', orderId);
     }
 
     // Include attachment note only when the invoice was actually generated
-    const invoiceNoteHtml = finalInvoicePng
+    const invoiceNoteHtml = finalInvoiceBuffer
       ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
       : '';
-    const invoiceNoteText = finalInvoicePng
+    const invoiceNoteText = finalInvoiceBuffer
       ? 'We have attached your order invoice to this email for your records.\n'
       : '';
 
-    const attachment = finalInvoicePng
+    const attachment = finalInvoiceBuffer
       ? [{
-          filename: `invoice-${orderId}.png`,
-          content: finalInvoicePng,
-          contentType: 'image/png',
+          filename: finalInvoiceFilename,
+          content: finalInvoiceBuffer,
+          contentType: finalInvoiceContentType,
         }]
       : [];
 
@@ -494,7 +528,7 @@ ${invoiceNoteText}If you need help, contact us at ${EMAIL_CONFIG.sender}.
 Thank you for shopping with Aabhushan Gallery.
 ${buildFooterText()}`;
 
-    const headers = buildCommonHeaders({ to: customerEmail, subject });
+    const { messageId, date, customHeaders } = buildCommonHeaders({ to: customerEmail, subject });
 
     await transporter.sendMail({
       from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -502,12 +536,14 @@ ${buildFooterText()}`;
       subject,
       html,
       text,
-      headers,
+      messageId,
+      date,
+      headers: customHeaders,
       attachments: attachment,
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId, finalInvoicePng ? '(with invoice)' : '(without invoice)');
+    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId, finalInvoiceBuffer ? `(with invoice: ${finalInvoiceFilename})` : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order confirmation email:', error?.message || error);
@@ -553,8 +589,11 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
 
     const subject = `Order Received - ${orderId}`;
 
-    // Generate invoice PNG BEFORE building email content
-    let finalInvoicePng = null;
+    // Generate invoice attachment: try PNG (Puppeteer) then SVG (no Puppeteer)
+    let finalInvoiceBuffer = null;
+    let finalInvoiceFilename = `invoice-${orderId}.png`;
+    let finalInvoiceContentType = 'image/png';
+
     try {
       const invoicePng = await generateInvoicePngBuffer({
         order,
@@ -564,7 +603,11 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
         title: 'Order Invoice',
       });
 
-      if (!invoicePng) {
+      if (invoicePng) {
+        finalInvoiceBuffer = Buffer.from(invoicePng);
+        console.log('[email] Order placed confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
+      } else {
+        console.log('[email] HTML PNG returned null for placed confirmation, trying SVG→PNG fallback...');
         const fallbackPng = await generateInvoicePngFromSvgBuffer({
           order,
           customerEmail,
@@ -572,31 +615,51 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
           senderEmail: EMAIL_CONFIG.sender,
           title: 'Order Invoice',
         });
-        finalInvoicePng = fallbackPng;
-      } else {
-        finalInvoicePng = invoicePng;
+        if (fallbackPng) {
+          finalInvoiceBuffer = Buffer.from(fallbackPng);
+          console.log('[email] SVG→PNG fallback generated for placed confirmation:', finalInvoiceBuffer.length, 'bytes');
+        }
       }
     } catch (invoiceError) {
-      console.error('Invoice generation error for order placed confirmation:', orderId, invoiceError?.message || invoiceError);
+      console.error('[email] PNG generation error for order placed confirmation:', orderId, ':', invoiceError?.message);
     }
 
-    if (!finalInvoicePng) {
-      console.error('Unable to generate invoice PNG for order placed confirmation:', orderId);
+    // Ultimate fallback: attach SVG directly (no Puppeteer required)
+    if (!finalInvoiceBuffer) {
+      try {
+        const svgString = buildInvoiceSvg({
+          order,
+          customerEmail,
+          customerName,
+          senderEmail: EMAIL_CONFIG.sender,
+          title: 'Order Invoice',
+        });
+        finalInvoiceBuffer = Buffer.from(svgString, 'utf8');
+        finalInvoiceFilename = `invoice-${orderId}.svg`;
+        finalInvoiceContentType = 'image/svg+xml';
+        console.log('[email] SVG-only fallback attached for placed confirmation:', finalInvoiceBuffer.length, 'bytes');
+      } catch (svgError) {
+        console.error('[email] SVG generation also failed for order placed confirmation:', orderId, ':', svgError?.message);
+      }
+    }
+
+    if (!finalInvoiceBuffer) {
+      console.error('[email] All invoice generation methods failed for order placed confirmation:', orderId);
     }
 
     // Include attachment note only when the invoice was actually generated
-    const invoiceNoteHtml = finalInvoicePng
+    const invoiceNoteHtml = finalInvoiceBuffer
       ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
       : '';
-    const invoiceNoteText = finalInvoicePng
+    const invoiceNoteText = finalInvoiceBuffer
       ? 'We have attached your order invoice to this email for your records.\n'
       : '';
 
-    const attachment = finalInvoicePng
+    const attachment = finalInvoiceBuffer
       ? [{
-          filename: `invoice-${orderId}.png`,
-          content: finalInvoicePng,
-          contentType: 'image/png',
+          filename: finalInvoiceFilename,
+          content: finalInvoiceBuffer,
+          contentType: finalInvoiceContentType,
         }]
       : [];
 
@@ -684,7 +747,7 @@ ${invoiceNoteText}If you have any questions, contact us at ${EMAIL_CONFIG.sender
 Thank you for shopping with Aabhushan Gallery.
 ${buildFooterText()}`;
 
-    const headers = buildCommonHeaders({ to: customerEmail, subject });
+    const { messageId, date, customHeaders } = buildCommonHeaders({ to: customerEmail, subject });
 
     await transporter.sendMail({
       from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
@@ -692,12 +755,14 @@ ${buildFooterText()}`;
       subject,
       html,
       text,
-      headers,
+      messageId,
+      date,
+      headers: customHeaders,
       attachments: attachment,
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId, finalInvoicePng ? '(with invoice)' : '(without invoice)');
+    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId, finalInvoiceBuffer ? `(with invoice: ${finalInvoiceFilename})` : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order placed confirmation email:', error?.message || error);

@@ -22,6 +22,7 @@ const ordersRouter = require("./routes/orders.routes");
 const socialItemRouter = require("./routes/socialItem.routes");
 const holidayModeRouter = require("./routes/holidayMode.routes");
 const emailMarketingRoutes = require('./routes/emailMarketingRoutes');
+const messagingRouter = require('./routes/messagingRoutes');
 const { startHolidayModeSchedulers } = require('./schedulers/holidayMode.scheduler');
 
 console.log(`Server starting on port ${PORT}...`);
@@ -87,6 +88,8 @@ app.use("/api", ordersRouter);
 app.use("/api", socialItemRouter);
 app.use("/api", holidayModeRouter);
 app.use('/api/email', emailMarketingRoutes);
+
+app.use('/api', messagingRouter);
 
 app.use('/api/scan', require('./routes/scanRoutes'));
 

@@ -419,6 +419,35 @@ const buildInvoiceSvg = ({ order, customerEmail, customerName, senderEmail, titl
 
 const generateInvoiceSvgBuffer = (params) => Buffer.from(buildInvoiceSvg(params), 'utf8');
 
+let _puppeteerCache = null;
+
+const _loadPuppeteer = () => {
+  if (_puppeteerCache !== null) return _puppeteerCache;
+  try {
+    _puppeteerCache = require('puppeteer');
+    return _puppeteerCache;
+  } catch (err) {
+    console.error('[invoice] puppeteer not available:', err.message);
+    _puppeteerCache = false;
+    return false;
+  }
+};
+
+const _launchBrowser = async () => {
+  const puppeteer = _loadPuppeteer();
+  if (!puppeteer) return null;
+  return puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--single-process',
+    ],
+  });
+};
+
 const generateInvoicePngBuffer = async ({
   order,
   customerEmail,
@@ -427,40 +456,29 @@ const generateInvoicePngBuffer = async ({
   title,
 }) => {
   let browser;
-
   try {
-    // Lazy-load to avoid hard crash if dependency is not installed yet.
-    const puppeteer = require('puppeteer');
-    const html = buildInvoiceHtml({
-      order,
-      customerEmail,
-      customerName,
-      senderEmail,
-      title,
-    });
-
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
+    browser = await _launchBrowser();
+    if (!browser) {
+      console.error('[invoice] Could not launch browser for PNG generation');
+      return null;
+    }
+    const html = buildInvoiceHtml({ order, customerEmail, customerName, senderEmail, title });
     const page = await browser.newPage();
     await page.setViewport({ width: 1080, height: 1520, deviceScaleFactor: 3 });
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
     const invoiceElement = await page.$('.sheet');
     if (!invoiceElement) {
+      console.error('[invoice] .sheet element not found in rendered HTML');
       return null;
     }
-
-    return await invoiceElement.screenshot({ type: 'png' });
+    const raw = await invoiceElement.screenshot({ type: 'png' });
+    return Buffer.from(raw);
   } catch (error) {
-    console.error('Failed to generate invoice PNG:', error.message);
+    console.error('[invoice] PNG generation failed:', error.message);
     return null;
   } finally {
-    if (browser) {
-      await browser.close().catch(() => null);
-    }
+    if (browser) await browser.close().catch(() => null);
   }
 };
 
@@ -472,47 +490,37 @@ const generateInvoicePngFromSvgBuffer = async ({
   title,
 }) => {
   let browser;
-
   try {
-    const puppeteer = require('puppeteer');
-    const svgMarkup = buildInvoiceSvg({
-      order,
-      customerEmail,
-      customerName,
-      senderEmail,
-      title,
-    });
-
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
+    browser = await _launchBrowser();
+    if (!browser) {
+      console.error('[invoice] Could not launch browser for SVG→PNG generation');
+      return null;
+    }
+    const svgMarkup = buildInvoiceSvg({ order, customerEmail, customerName, senderEmail, title });
     const page = await browser.newPage();
     await page.setViewport({ width: 1640, height: 1540, deviceScaleFactor: 2 });
     await page.setContent(
       `<!DOCTYPE html><html><body style="margin:0;background:#fff;">${svgMarkup}</body></html>`,
-      { waitUntil: 'networkidle0' }
+      { waitUntil: 'domcontentloaded', timeout: 10000 }
     );
-
     const svgElement = await page.$('svg');
     if (!svgElement) {
+      console.error('[invoice] <svg> element not found in rendered SVG page');
       return null;
     }
-
-    return await svgElement.screenshot({ type: 'png' });
+    const raw = await svgElement.screenshot({ type: 'png' });
+    return Buffer.from(raw);
   } catch (error) {
-    console.error('Failed to generate PNG from SVG invoice:', error.message);
+    console.error('[invoice] SVG→PNG generation failed:', error.message);
     return null;
   } finally {
-    if (browser) {
-      await browser.close().catch(() => null);
-    }
+    if (browser) await browser.close().catch(() => null);
   }
 };
 
 module.exports = {
   buildInvoiceHtml,
+  buildInvoiceSvg,
   generateInvoicePngBuffer,
   generateInvoicePngFromSvgBuffer,
   generateInvoiceSvgBuffer,

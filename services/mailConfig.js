@@ -48,15 +48,15 @@ const buildCommonHeaders = ({ to, subject }) => {
   return {
     messageId,
     date: timestamp,
-    'X-Mailer': 'AabhushanGallery-Mailer/1.0',
-    'X-Priority': '3',
-    'X-MSMail-Priority': 'Normal',
-    'Importance': 'Normal',
-    'Precedence': 'bulk',
-    'List-Unsubscribe': `<mailto:${EMAIL_CONFIG.sender}?subject=unsubscribe>`,
-    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-    'Feedback-ID': `order-notification:${MESSAGE_ID_HASH}:${EMAIL_CONFIG.domain}`,
-    'MIME-Version': '1.0',
+    customHeaders: {
+      'X-Mailer': 'AabhushanGallery-Mailer/1.0',
+      'X-Priority': '3',
+      'X-MSMail-Priority': 'Normal',
+      'Importance': 'Normal',
+      'List-Unsubscribe': `<mailto:${EMAIL_CONFIG.sender}?subject=unsubscribe>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      'Feedback-ID': `order-notification:${MESSAGE_ID_HASH}:${EMAIL_CONFIG.domain}`,
+    },
   };
 };
 
