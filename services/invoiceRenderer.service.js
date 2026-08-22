@@ -514,6 +514,13 @@ const _launchBrowser = async () => {
 
 const generateInvoicePngBuffer = async (params) => {
   const data = normalizeInvoiceData(params?.invoiceNo ? params : extractInvoiceData(params));
+
+  // INVOICE_FORCE_SHARP=1 skips Puppeteer entirely (used to exercise the
+  // no-Chrome fallback path, e.g. to mirror shared-hosting behaviour locally).
+  if (process.env.INVOICE_FORCE_SHARP === '1') {
+    return generateInvoicePngWithSharp(data);
+  }
+
   let browser;
   try {
     const launched = await _launchBrowser();
@@ -521,10 +528,10 @@ const generateInvoicePngBuffer = async (params) => {
       // Surface WHY (missing system libs on shared hosting is the usual cause)
       // so production incidents are debuggable from logs alone.
       console.error(
-        '[invoice] Browser launch failed — will fall back to vector SVG invoice:',
+        '[invoice] Browser launch failed — falling back to sharp SVG rasterizer:',
         launched.error
       );
-      return null;
+      return generateInvoicePngWithSharp(data);
     }
     browser = launched.browser;
     const html = buildInvoiceHtml({ ...data, _logoDataUri: getLogoDataUri() });
@@ -536,123 +543,232 @@ const generateInvoicePngBuffer = async (params) => {
     const sheetEl = await page.$('.page');
     if (!sheetEl) {
       console.error('[invoice] .page element not found');
-      return null;
+      return generateInvoicePngWithSharp(data);
     }
     const raw = await sheetEl.screenshot({ type: 'png' });
     return Buffer.from(raw);
   } catch (error) {
-    console.error('[invoice] PNG generation failed:', error.message);
-    return null;
+    console.error('[invoice] PNG generation failed — trying sharp fallback:', error.message);
+    return generateInvoicePngWithSharp(data);
   } finally {
     if (browser) await browser.close().catch(() => null);
   }
 };
 
+// Renders the vector-SVG invoice to a real PNG via sharp/librsvg — no Chrome
+// required, works on virtually any host. Output is 2× scale (2528px wide),
+// matching the Puppeteer pipeline's deviceScaleFactor.
+const generateInvoicePngWithSharp = async (dataOrParams) => {
+  try {
+    const sharp = require('sharp');
+    const svgMarkup = buildInvoiceSvgMarkup(
+      normalizeInvoiceData(dataOrParams?.invoiceNo || dataOrParams?.items ? dataOrParams : extractInvoiceData(dataOrParams))
+    );
+    return await sharp(Buffer.from(svgMarkup, 'utf8'), { density: 144 }) // 144/72 = 2×
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+  } catch (error) {
+    console.error('[invoice] sharp PNG rasterization failed:', error.message);
+    return null;
+  }
+};
+
 // ─── VECTOR SVG INVOICE (no-headless-Chromium fallback) ──────────────────────
-// A genuine <svg> document — NOT HTML renamed to .svg — so the attachment is a
-// valid image that opens correctly in any browser/viewer when Puppeteer cannot
-// run on the host (typical on shared hosting without Chrome's system libs).
+// A pixel-accurate replica of the HTML invoice rendered as pure SVG — same
+// layout coordinates as the Puppeteer template — so hosts without Chrome
+// (typical cPanel/shared hosting) still get the exact reference design.
+// Rasterized to PNG via sharp; also usable standalone when even sharp fails.
+
+// Greedy word-wrap approximating Helvetica metrics (~0.52em avg glyph width).
+const wrapTextForSvg = (value, maxWidthPx, fontSize, bold = false) => {
+  const text = String(value ?? '');
+  const charW = fontSize * (bold ? 0.56 : 0.52);
+  const maxChars = Math.max(8, Math.floor(maxWidthPx / charW));
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length) return [''];
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (candidate.length <= maxChars) {
+      line = candidate;
+    } else {
+      if (line) lines.push(line);
+      line = word.length > maxChars ? word.slice(0, maxChars - 1) + '…' : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.slice(0, 6); // hard cap so pathological input cannot explode height
+};
 
 const buildInvoiceSvgMarkup = (data) => {
-  const W = 800;
-  const M = 40;
-  const rowH = 36;
-  const headerRowH = 44;
-  const items = Array.isArray(data.items) ? data.items : [];
-  const font = 'Arial, Helvetica, sans-serif';
+  const d = normalizeInvoiceData(data);
+  const W = 1264;
+  const PAD_X = 35;
+  const CONTENT_W = W - PAD_X * 2; // 1194
+  const FONT = 'Helvetica, Arial, sans-serif';
+  const items = d.items;
 
-  const tableTop = 400;
-  const tableBottom = tableTop + headerRowH + Math.max(items.length, 1) * rowH;
+  // ── layout constants mirroring the verified HTML template ──
+  const HEADER_H = 365;
+  const SUM_TOP = HEADER_H + 1;
+  const CARD_H = 78;
+  const BILL_TOP = SUM_TOP + 24 + CARD_H + 24;
+  const BILL_PAD = 24;
+  const DETAIL_LH = 27;
+  const CARD_INNER_W = 587 - 28 * 2;
 
-  let totalsY = tableBottom + 36;
-  const totalsRows = [['Subtotal', data.subtotal]];
-  if (Number(data.shippingFee) > 0) totalsRows.push(['Shipping', data.shippingFee]);
-  if (Number(data.giftBoxCharge) > 0) totalsRows.push(['Gift Box', data.giftBoxCharge]);
-  const grandTotalY = totalsY + totalsRows.length * 28 + 20;
-  const footerY = grandTotalY + 60;
-  const H = footerY + 70;
+  const billToFields = [
+    { text: d.customer.name, bold: true },
+    ...wrapTextForSvg(d.customer.address, CARD_INNER_W, 18).map((t) => ({ text: t })),
+    { text: `Phone: ${d.customer.phone}` },
+    { text: `Email: ${d.customer.email}` },
+  ];
+  const fromLines = wrapTextForSvg(d.seller.address, CARD_INNER_W, 18).length + 2; // phone + email
+  const billCardH = Math.max(235, BILL_PAD * 2 + 25 + 16 + billToFields.length * DETAIL_LH);
+  const fromCardH = Math.max(235, BILL_PAD * 2 + 25 + 16 + fromLines * DETAIL_LH);
+  const CARD_H_MAX = Math.max(billCardH, fromCardH);
+
+  const TABLE_TOP = BILL_TOP + CARD_H_MAX + 24;
+  const COLS = [0.08, 0.42, 0.12, 0.19, 0.19].map((f) => f * CONTENT_W);
+  const colX = [PAD_X];
+  COLS.forEach((w) => colX.push(colX[colX.length - 1] + w));
+  const HEAD_ROW_H = 49;
+  const itemCellW = COLS[1] - 36;
+  const rowHeights = items.map((it) =>
+    Math.max(50, wrapTextForSvg(it.name, itemCellW, 18).length * DETAIL_LH + 23)
+  );
+  const TABLE_BOTTOM =
+    TABLE_TOP + HEAD_ROW_H + rowHeights.reduce((s, h) => s + h, 0);
+
+  const totalsRows = [
+    { label: 'Subtotal', value: formatCurrency(d.subtotal, d.currency) },
+    { label: 'Shipping Fee', value: formatCurrency(d.shippingFee, d.currency) },
+    { label: 'Gift Box Charge', value: formatCurrency(d.giftBoxCharge, d.currency) },
+    ...(d.otherCharges || []).map((c) => ({
+      label: c.label,
+      value: formatCurrency(c.amount, d.currency),
+    })),
+  ];
+  const TOTALS_W = 450;
+  const TOTALS_H = Math.round(
+    36 + totalsRows.length * 36 + 17 + 40
+  );
+  const TOTALS_TOP = TABLE_BOTTOM + 24;
+  const TOTALS_X = W - PAD_X - TOTALS_W;
+
+  const FOOTER_TOP = TOTALS_TOP + TOTALS_H + 26;
+  const DIVIDER_Y = FOOTER_TOP + 22;
+  const H = DIVIDER_Y + 24 + 21 + 28;
 
   const p = [];
+  p.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`);
+  p.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="20" fill="#ffffff" stroke="#E4E7EC"/>`);
+
   const T = (x, y, size, fill, content, extra = '') =>
-    `<text x="${x}" y="${y}" font-family="${font}" font-size="${size}" fill="${fill}"${extra}>${content}</text>`;
+    `<text x="${x}" y="${y}" font-family="${FONT}" font-size="${size}" fill="${fill}"${extra}>${escapeHtml(content)}</text>`;
 
-  // Background + header band
-  p.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`);
-  p.push(`<rect x="0" y="0" width="${W}" height="120" fill="#111827"/>`);
-  p.push(T(M, 56, 26, '#ffffff', 'Aabhushan Gallery', ' font-weight="bold"'));
-  p.push(T(M, 84, 13, '#9ca3af', escapeHtml(String(data.seller?.address || ''))));
-  p.push(
-    T(
-      M,
-      104,
-      13,
-      '#9ca3af',
-      escapeHtml(`${data.seller?.phone || ''}   |   ${data.seller?.email || ''}`)
-    )
-  );
-  p.push(T(W - M, 60, 28, '#ffffff', 'INVOICE', ' text-anchor="end" font-weight="bold"'));
-  p.push(T(W - M, 86, 14, '#9ca3af', escapeHtml(String(data.title || 'Order Confirmation')), ' text-anchor="end"'));
+  // ── HEADER ──
+  p.push(`<path d="M ${W} 20 A 20 20 0 0 0 ${W - 20} 0 L 20 0 A 20 20 0 0 0 0 20 L 0 ${HEADER_H} L ${W} ${HEADER_H} Z" fill="#F4F8FC"/>`);
+  p.push(`<line x1="0" y1="${HEADER_H + 0.5}" x2="${W}" y2="${HEADER_H + 0.5}" stroke="#E0E4E8" stroke-width="1"/>`);
 
-  // Meta
-  p.push(T(M, 172, 15, '#6b7280', `Invoice No: <tspan fill="#111827" font-weight="bold">${escapeHtml(String(data.invoiceNo || 'N/A'))}</tspan>`));
-  p.push(T(M, 196, 14, '#6b7280', `Date: <tspan fill="#111827">${escapeHtml(String(data.date || 'N/A'))}</tspan>`));
-
-  // Customer block
-  p.push(T(M, 250, 12, '#9ca3af', 'BILLED TO', ' letter-spacing="1"'));
-  p.push(T(M, 276, 17, '#111827', escapeHtml(truncate(data.customer?.name || 'Valued Customer', 44)), ' font-weight="bold"'));
-  if (data.customer?.address && data.customer.address !== 'N/A') {
-    p.push(T(M, 300, 13, '#374151', escapeHtml(truncate(data.customer.address, 70))));
+  const logoDataUri = data._logoDataUri || getLogoDataUri();
+  if (logoDataUri) {
+    p.push(`<image x="46" y="39" height="288" preserveAspectRatio="xMinYMid meet" xlink:href="${logoDataUri}"/>`);
+  } else {
+    p.push(T(46, 200, 32, '#111827', d.seller.name, ' font-weight="bold"'));
   }
-  p.push(T(M, data.customer?.address && data.customer.address !== 'N/A' ? 320 : 300, 13, '#374151', escapeHtml(`Phone: ${data.customer?.phone || 'N/A'}`)));
-  if (data.customer?.email && data.customer.email !== 'N/A') {
-    p.push(T(M, data.customer?.address && data.customer.address !== 'N/A' ? 340 : 320, 13, '#374151', escapeHtml(truncate(String(data.customer.email), 60))));
-  }
+  p.push(T(W - 45, 178, 44, '#111827', d.title, ' font-weight="bold" text-anchor="end" letter-spacing="-0.5"'));
+  p.push(T(W - 45, 218, 20, '#475569', `Order #${d.orderNo}`, ' text-anchor="end"'));
 
-  // Table header
-  p.push(`<rect x="${M}" y="${tableTop}" width="${W - 2 * M}" height="${headerRowH}" fill="#f3f4f6"/>`);
-  p.push(T(M + 10, tableTop + 28, 12, '#6b7280', 'ITEM', ' letter-spacing="1"'));
-  p.push(T(500, tableTop + 28, 12, '#6b7280', 'QTY', ' text-anchor="middle" letter-spacing="1"'));
-  p.push(T(650, tableTop + 28, 12, '#6b7280', 'UNIT PRICE', ' text-anchor="end" letter-spacing="1"'));
-  p.push(T(W - M - 10, tableTop + 28, 12, '#6b7280', 'AMOUNT', ' text-anchor="end" letter-spacing="1"'));
-  p.push(`<line x1="${M}" y1="${tableTop + headerRowH}" x2="${W - M}" y2="${tableTop + headerRowH}" stroke="#d1d5db" stroke-width="1"/>`);
-
-  // Item rows
-  const rows = items.length
-    ? items
-    : [{ name: 'No items', quantity: '', unitPrice: null, amount: null }];
-  rows.forEach((item, i) => {
-    const y = tableTop + headerRowH + i * rowH + 24;
-    p.push(T(M + 10, y, 13, '#111827', escapeHtml(truncate(item.name || 'Product', 52))));
-    if (items.length) {
-      p.push(T(500, y, 13, '#374151', String(item.quantity ?? ''), ' text-anchor="middle"'));
-      p.push(T(650, y, 13, '#374151', item.unitPrice === null ? '' : escapeHtml(formatCurrency(item.unitPrice, data.currency)), ' text-anchor="end"'));
-      p.push(T(W - M - 10, y, 13, '#111827', item.amount === null ? '' : escapeHtml(formatCurrency(item.amount, data.currency)), ' text-anchor="end" font-weight="bold"'));
-    }
-    if (i < rows.length - 1) {
-      const ly = tableTop + headerRowH + (i + 1) * rowH;
-      p.push(`<line x1="${M}" y1="${ly}" x2="${W - M}" y2="${ly}" stroke="#f3f4f6" stroke-width="1"/>`);
-    }
+  // ── SUMMARY CARDS ──
+  const sumCards = [
+    { label: 'INVOICE NO', value: String(d.invoiceNo) },
+    { label: 'DATE', value: String(d.date) },
+    { label: 'ITEMS', value: String(d.totalItems) },
+  ];
+  sumCards.forEach((c, i) => {
+    const cx = PAD_X + i * (386 + 18);
+    p.push(`<rect x="${cx}" y="${SUM_TOP + 24}" width="386" height="${CARD_H}" rx="12" fill="#ffffff" stroke="#DDE2E7"/>`);
+    p.push(T(cx + 22, SUM_TOP + 24 + 31, 16, '#667085', c.label, ' letter-spacing="0.5"'));
+    p.push(T(cx + 22, SUM_TOP + 24 + 52, 20, '#172033', c.value, ' font-weight="bold"'));
   });
 
-  // Totals
-  totalsRows.forEach(([label, value]) => {
-    p.push(T(600, totalsY, 13, '#6b7280', escapeHtml(label), ' text-anchor="end"'));
-    p.push(T(W - M - 10, totalsY, 13, '#374151', escapeHtml(formatCurrency(value, data.currency)), ' text-anchor="end"'));
-    totalsY += 28;
+  // ── BILLING CARDS ──
+  const drawBillingCard = (cx, title, fields) => {
+    p.push(`<rect x="${cx}" y="${BILL_TOP}" width="587" height="${CARD_H_MAX}" rx="14" fill="#ffffff" stroke="#DDE2E7"/>`);
+    p.push(T(cx + 28, BILL_TOP + 44, 21, '#101828', title, ' font-weight="bold"'));
+    let by = BILL_TOP + 89;
+    for (const f of fields) {
+      p.push(T(cx + 28, by, 18, f.bold ? '#101828' : '#344054', f.text, f.bold ? ' font-weight="bold"' : ''));
+      by += DETAIL_LH;
+    }
+  };
+  drawBillingCard(PAD_X, 'From', [
+    ...wrapTextForSvg(d.seller.address, CARD_INNER_W, 18).map((t) => ({ text: t })),
+    { text: `Phone: ${d.seller.phone}` },
+    { text: `Email: ${d.seller.email}` },
+  ]);
+  drawBillingCard(PAD_X + 587 + 18, 'Bill To', billToFields);
+
+  // ── ITEMS TABLE ──
+  p.push(`<rect x="${colX[0]}" y="${TABLE_TOP}" width="${CONTENT_W}" height="${HEAD_ROW_H}" fill="#F4F8FC"/>`);
+  const headers = ['#', 'Item', 'Qty', 'Unit Price', 'Amount'];
+  headers.forEach((h, i) => {
+    const size = 16;
+    const baseY = TABLE_TOP + 30;
+    if (i === 0) p.push(T(colX[i] + 18, baseY, size, '#344054', h, ' font-weight="bold"'));
+    else if (i === 1) p.push(T(colX[i] + 18, baseY, size, '#344054', h, ' font-weight="bold"'));
+    else if (i === 2)
+      p.push(T((colX[i] + colX[i + 1]) / 2, baseY, size, '#344054', h, ' font-weight="bold" text-anchor="middle"'));
+    else
+      p.push(T(colX[i + 1] - 18, baseY, size, '#344054', h, ' font-weight="bold" text-anchor="end"'));
   });
-  p.push(`<line x1="${W - M - 260}" y1="${grandTotalY - 24}" x2="${W - M}" y2="${grandTotalY - 24}" stroke="#111827" stroke-width="1"/>`);
-  p.push(T(600, grandTotalY, 16, '#111827', 'GRAND TOTAL', ' text-anchor="end" font-weight="bold"'));
-  p.push(T(W - M - 10, grandTotalY, 18, '#111827', escapeHtml(formatCurrency(data.totalAmount, data.currency)), ' text-anchor="end" font-weight="bold"'));
 
-  // Footer
-  p.push(T(W / 2, footerY, 13, '#6b7280', 'Thank you for shopping with Aabhushan Gallery!', ' text-anchor="middle"'));
-  p.push(T(W / 2, footerY + 22, 11, '#9ca3af', escapeHtml('This is a computer-generated invoice.'), ' text-anchor="middle"'));
+  let rowY = TABLE_TOP + HEAD_ROW_H;
+  items.forEach((it, i) => {
+    const rh = rowHeights[i];
+    const baseY = rowY + 31;
+    p.push(T(colX[0] + 18, baseY, 18, '#344054', i + 1));
+    const nameLines = wrapTextForSvg(it.name, itemCellW, 18);
+    nameLines.forEach((line, li) =>
+      p.push(T(colX[1] + 18, baseY + li * DETAIL_LH, 18, '#344054', line, ' font-weight="500"'))
+    );
+    p.push(T((colX[2] + colX[3]) / 2, baseY, 18, '#344054', it.quantity, ' text-anchor="middle"'));
+    p.push(T(colX[4] - 18, baseY, 18, '#344054', formatCurrency(it.unitPrice, d.currency), ' text-anchor="end"'));
+    p.push(T(colX[5] - 18, baseY, 18, '#344054', formatCurrency(it.amount, d.currency), ' text-anchor="end" font-weight="bold"'));
+    rowY += rh;
+  });
+  // grid lines
+  for (let i = 0; i <= COLS.length; i++)
+    p.push(`<line x1="${colX[i]}" y1="${TABLE_TOP}" x2="${colX[i]}" y2="${TABLE_BOTTOM}" stroke="#DDE2E7" stroke-width="1"/>`);
+  p.push(`<rect x="${colX[0]}" y="${TABLE_TOP}" width="${CONTENT_W}" height="${HEAD_ROW_H + rowHeights.reduce((s, h) => s + h, 0)}" fill="none" stroke="#DDE2E7"/>`);
+  let gy = TABLE_TOP + HEAD_ROW_H;
+  rowHeights.forEach((rh) => {
+    p.push(`<line x1="${colX[0]}" y1="${gy}" x2="${colX[0] + CONTENT_W}" y2="${gy}" stroke="#DDE2E7" stroke-width="1"/>`);
+    gy += rh;
+  });
 
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
-    p.join('') +
-    `</svg>`
-  );
+  // ── TOTALS BOX ──
+  p.push(`<rect x="${TOTALS_X}" y="${TOTALS_TOP}" width="${TOTALS_W}" height="${TOTALS_H}" rx="14" fill="#F9FAFB" stroke="#DDE2E7"/>`);
+  let ty = TOTALS_TOP + 44;
+  totalsRows.forEach((r) => {
+    p.push(T(TOTALS_X + 22, ty, 17, '#667085', r.label));
+    p.push(T(TOTALS_X + TOTALS_W - 22, ty, 17, '#344054', r.value, ' font-weight="500" text-anchor="end"'));
+    ty += 36;
+  });
+  const dividerY = ty - 36 + 25;
+  p.push(`<line x1="${TOTALS_X + 1}" y1="${dividerY}" x2="${TOTALS_X + TOTALS_W - 1}" y2="${dividerY}" stroke="#DDE2E7" stroke-width="1"/>`);
+  const totalBase = dividerY + 42;
+  p.push(T(TOTALS_X + 22, totalBase, 20, '#101828', 'Total', ' font-weight="bold"'));
+  p.push(T(TOTALS_X + TOTALS_W - 22, totalBase, 22, '#111827', formatCurrency(d.totalAmount, d.currency), ' font-weight="bold" text-anchor="end"'));
+
+  // ── FOOTER ──
+  p.push(`<line x1="${PAD_X}" y1="${DIVIDER_Y}" x2="${W - PAD_X}" y2="${DIVIDER_Y}" stroke="#D0D5DD" stroke-width="2" stroke-dasharray="6 5"/>`);
+  p.push(T(W / 2, DIVIDER_Y + 37, 16, '#667085', 'Thank you for your order. This is a system-generated document.', ' text-anchor="middle"'));
+
+  p.push('</svg>');
+  return p.join('\n');
 };
 
 const buildInvoiceSvg = (params) => {
@@ -669,7 +785,8 @@ module.exports = {
   buildInvoiceHtml,
   buildInvoiceSvg,
   generateInvoicePngBuffer,
-  generateInvoicePngFromSvgBuffer,
+  generateInvoicePngWithSharp,
+  generateInvoicePngFromSvgBuffer: generateInvoicePngWithSharp,
   generateInvoiceSvgBuffer,
   extractInvoiceData,
   normalizeInvoiceData,
