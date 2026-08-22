@@ -1,5 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { EMAIL_CONFIG, transporter, buildCommonHeaders } = require('./mailConfig');
+const { buildEmailShell, getLogoAttachment } = require('./emailTemplate');
 const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePngBuffer,
@@ -948,12 +949,130 @@ ${buildFooterText()}`;
   }
 };
 
+// ---------------------------------------------------------------------------
+// Restock ("back in stock") notification — sent to customers who tried to add
+// an out-of-stock product to their cart and opted in to be notified.
+// ---------------------------------------------------------------------------
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const getPublicBaseUrl = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return (
+    (isProduction ? process.env.CLIENT_URL_PROD : process.env.CLIENT_URL) ||
+    process.env.CLIENT_URL_PROD ||
+    process.env.CLIENT_URL ||
+    ''
+  );
+};
+
+const buildProductPageUrl = (productId) =>
+  `${getPublicBaseUrl()}/#/products/view/${productId}`;
+
+// Mirrors the client's resolveProductImageUrl() so emails render the same
+// images the storefront does (files live under /uploads/products).
+const buildProductImageUrl = (rawValue) => {
+  if (!rawValue) return '';
+  const value = String(rawValue).trim();
+  if (/^https?:\/\//i.test(value)) return encodeURI(value);
+  const cleaned = encodeURIComponent(value.replace(/^\/+/, ''));
+  return `${getPublicBaseUrl()}/uploads/products/${cleaned}`;
+};
+
+const getProductDisplayPrice = (product) => {
+  const price =
+    product.discountedPrice ?? product.originalPrice ?? product.price ?? null;
+  return price !== null ? formatCurrency(price) : null;
+};
+
+/**
+ * Notify a single subscriber that a product they wanted is back in stock.
+ * Throws on failure so callers (restockNotification.service) can retry later.
+ */
+const sendRestockAvailableEmail = async (recipientEmail, product) => {
+  const productName = escapeHtml(product.name || 'A product you liked');
+  const displayPrice = getProductDisplayPrice(product);
+  const firstImage = product.images?.find((img) => img?.coloredImages?.length)
+    ?.coloredImages?.[0];
+  const imageUrl = buildProductImageUrl(firstImage);
+  const productUrl = buildProductPageUrl(product._id);
+
+  const subject = `Back in stock: ${product.name || 'Your awaited item'}`;
+
+  const imageHtml = imageUrl
+    ? `<a href="${productUrl}" style="text-decoration:none;">
+         <img src="${imageUrl}" alt="${productName}" width="220" style="width:220px;height:auto;border-radius:10px;border:1px solid #e5e7eb;display:block;margin:0 auto;" />
+       </a>`
+    : '';
+
+  const bodyHtml = `
+    <p style="margin:0 0 18px;font-size:14px;color:#374151;">Good news! The item you tried to order is <strong>back in stock</strong>.</p>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #22c55e;border-radius:8px;padding:20px;text-align:center;">
+      ${imageHtml}
+      <h3 style="margin:14px 0 4px;font-size:17px;color:#111827;">${productName}</h3>
+      ${displayPrice ? `<p style="margin:0;font-size:15px;color:#166534;font-weight:700;">${displayPrice}</p>` : ''}
+      <p style="margin:6px 0 0;font-size:13px;color:#16a34a;font-weight:600;">Limited stock available</p>
+    </div>
+    <div style="text-align:center;margin-top:24px;">
+      <a href="${productUrl}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 32px;border-radius:999px;">
+        Shop Now
+      </a>
+    </div>
+    <p style="margin:22px 0 0;font-size:12px;color:#6b7280;text-align:center;">
+      You received this email because you requested a restock alert for this item. This is a one-time notification.
+    </p>
+  `;
+
+  const text = `Back in stock!
+
+${product.name} is available again${displayPrice ? ` at ${displayPrice}` : ''}.
+Quantities are limited - grab yours before it sells out.
+
+Shop now: ${productUrl}
+
+You received this one-time email because you requested a restock alert for this item.
+${buildFooterText()}`;
+
+  const { messageId, date, customHeaders } = buildCommonHeaders({
+    to: recipientEmail,
+    subject,
+  });
+
+  await transporter.sendMail({
+    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+    to: recipientEmail,
+    subject,
+    html: buildEmailShell({
+      subject,
+      title: 'It\u2019s back in stock!',
+      subtitle: 'The item you were waiting for is available again',
+      bodyHtml,
+    }),
+    text,
+    messageId,
+    date,
+    headers: customHeaders,
+    attachments: getLogoAttachment(),
+    replyTo: EMAIL_CONFIG.sender,
+  });
+
+  console.log(`[Restock] Back-in-stock email sent to ${recipientEmail}`);
+  return true;
+};
+
 module.exports = {
   sendOutOfStockNotification,
   sendCompleteOutOfStockReport,
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
   sendOrderPlacedConfirmationToCustomer,
+  sendRestockAvailableEmail,
 
   transporter,
   EMAIL_CONFIG,

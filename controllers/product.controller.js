@@ -1,6 +1,9 @@
 const { Product, ProductImage } = require("../modals/product.modal");
 const fs = require("fs");
 const path = require("path");
+const {
+  notifySubscribersOfRestock,
+} = require("../services/restockNotification.service");
 
 const getUploadedFiles = (files, fieldName) => {
   if (!files) return [];
@@ -1372,6 +1375,7 @@ exports.updateProduct = async (req, res, next) => {
     }
 
     // ✅ IMPROVED: Update product with new data and validation
+    const previousStockQuantity = Number(product.stockQuantity || 0);
     product.name = req.body.name || product.name;
     product.price =
       req.body.price !== undefined ? parseFloat(req.body.price) : product.price;
@@ -1421,6 +1425,14 @@ exports.updateProduct = async (req, res, next) => {
         : product.isHotSelling;
 
     await product.save();
+
+    // Restock event: the product just came back from out-of-stock → notify
+    // everyone who asked to be emailed when it returns (non-blocking).
+    if (previousStockQuantity <= 0 && Number(product.stockQuantity) > 0) {
+      notifySubscribersOfRestock(product._id).catch((err) =>
+        console.error("[Restock] Notification run failed:", err?.message || err)
+      );
+    }
 
     const finalProduct = await Product.findById(product._id)
       .populate("category")
