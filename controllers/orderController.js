@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 const Orders = require("../modals/orderModal");
 const { Product } = require("../modals/product.modal");
+const Coupon = require("../modals/coupon.modal");
+const {
+  validateCouponForOrder,
+  normalizeCouponCode,
+} = require("./couponController");
 const {
   sendOutOfStockNotification,
   sendCompleteOutOfStockReport,
@@ -132,6 +137,24 @@ exports.createOrder = async (req, res) => {
 
     const outOfStockProducts = [];
 
+    // Coupon validation — always enforced server-side against the line-item subtotal
+    let appliedCoupon = null;
+    let couponDiscount = 0;
+    const rawCouponCode = normalizeCouponCode(req.body.couponCode);
+    if (rawCouponCode) {
+      // NOTE: products[].price is the LINE TOTAL (unit price × quantity) sent by the client
+      const couponSubtotal = (Array.isArray(req.body.products) ? req.body.products : [])
+        .reduce((sum, item) => sum + (Number(item?.price) || 0), 0);
+      const couponResult = await validateCouponForOrder(rawCouponCode, couponSubtotal, req.body.userId);
+      if (!couponResult.ok) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ error: `Coupon rejected: ${couponResult.message}` });
+      }
+      appliedCoupon = couponResult.coupon;
+      couponDiscount = couponResult.discountAmount;
+    }
+
     // Atomic stock decrement — prevents race conditions
     for (const product of req.body.products) {
       const { productId, quantity } = product;
@@ -182,7 +205,16 @@ exports.createOrder = async (req, res) => {
       isInsideValley: req.body.isInsideValley,
       productOrderId,
       shippingPrice: req.body.shippingPrice,
-      totalAmount: req.body.totalAmount,
+      // Recomputed server-side — never trust the client-sent totalAmount.
+      // products[].price is the LINE TOTAL (unit price × quantity) sent by the client.
+      totalAmount:
+        (Array.isArray(req.body.products) ? req.body.products : [])
+          .reduce((sum, item) => sum + (Number(item?.price) || 0), 0) +
+        (Number(req.body.shippingPrice) || 0) +
+        (Number(req.body.giftBoxCharge) || 0) -
+        couponDiscount,
+      couponCode: appliedCoupon ? appliedCoupon.code : undefined,
+      couponDiscount,
       phoneNumber: normalizedPhoneNumber,
       isHomeDelivery: req.body.isHomeDelivery,
       shippingLocation: normalizedShippingLocation,
@@ -192,7 +224,26 @@ exports.createOrder = async (req, res) => {
     });
 
     const createOrderedData = await newOrderData.save({ session });
-    
+
+    // Redeem the coupon inside the same transaction as the order
+    if (appliedCoupon) {
+      await Coupon.findByIdAndUpdate(
+        appliedCoupon._id,
+        {
+          $inc: { usedCount: 1 },
+          $push: {
+            usedByUsers: {
+              userId: req.body.userId || undefined,
+              productOrderId,
+              discountAmount: couponDiscount,
+              usedAt: new Date(),
+            },
+          },
+        },
+        { session }
+      );
+    }
+
     // Commit the transaction
     await session.commitTransaction();
     session.endSession();
