@@ -24,7 +24,6 @@
     "mongoose": "^8.0.3",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.16",
-    "opentype.js": "^2.0.0",
     "puppeteer": "^24.7.2",
     "react-zoom-slider": "^0.1.0",
     "sharp": "^0.35.3",

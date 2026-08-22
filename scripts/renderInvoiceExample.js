@@ -45,11 +45,15 @@ const referenceInvoiceData = {
       name: 'Small Pearl And large Stone On Both Side',
       quantity: 1,
       unitPrice: 600,
+      amount: 600,
     },
   ],
 
+  subtotal: 600,
   shippingFee: 100,
   giftBoxCharge: 0,
+  totalAmount: 700,
+  totalItems: 1,
 };
 
 const OUT_DIR = path.join(__dirname, 'output');
@@ -62,23 +66,20 @@ const OUT_DIR = path.join(__dirname, 'output');
   const htmlPath = path.join(OUT_DIR, 'invoice-example.html');
   fs.writeFileSync(htmlPath, html, 'utf8');
 
-  // Render PNG
+  // Render PNG (falls back to SVG attachment logic in production emails when
+  // headless Chrome cannot run on the host — handled by emailServices.js)
   const png = await generateInvoicePngBuffer(referenceInvoiceData);
   if (!png) {
-    console.error('PNG generation failed — see logs above.');
+    console.error(
+      'PNG generation failed (headless Chrome unavailable on this host). ' +
+        'Emails will attach the vector SVG invoice instead.'
+    );
     process.exit(1);
   }
   const pngPath = path.join(OUT_DIR, 'invoice-example.png');
   fs.writeFileSync(pngPath, png);
 
-  // Report dimensions via sharp (already a dependency)
-  let dims = '';
-  try {
-    const meta = await require('sharp')(png).metadata();
-    dims = `${meta.width}x${meta.height}px @2x`;
-  } catch (_) { /* optional */ }
-
   console.log('HTML written to:', htmlPath);
   console.log('PNG written to :', pngPath);
-  console.log('PNG size       :', `${png.length.toLocaleString()} bytes`, dims);
+  console.log('PNG size       :', `${png.length.toLocaleString()} bytes`);
 })();
