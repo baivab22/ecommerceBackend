@@ -1,10 +1,14 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
-const { EMAIL_CONFIG, transporter, buildCommonHeaders } = require('./mailConfig');
+const {
+  EMAIL_CONFIG,
+  transporter,
+  buildCommonHeaders,
+  getPublicSiteUrl,
+} = require('./mailConfig');
 const { buildEmailShell, getLogoAttachment } = require('./emailTemplate');
 const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePngBuffer,
-  generateInvoicePngFromSvgBuffer,
   buildInvoiceSvg,
 } = require('./invoiceRenderer.service');
 
@@ -499,18 +503,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
         finalInvoiceBuffer = Buffer.from(invoicePng);
         console.log('[email] Order confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
       } else {
-        console.log('[email] HTML PNG returned null, trying SVG→PNG fallback...');
-        const fallbackPng = await generateInvoicePngFromSvgBuffer({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Confirmation',
-        });
-        if (fallbackPng) {
-          finalInvoiceBuffer = Buffer.from(fallbackPng);
-          console.log('[email] SVG→PNG fallback generated:', finalInvoiceBuffer.length, 'bytes');
-        }
+        console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
       }
     } catch (invoiceError) {
       console.error('[email] PNG generation error for order', orderId, ':', invoiceError?.message);
@@ -748,18 +741,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
         finalInvoiceBuffer = Buffer.from(invoicePng);
         console.log('[email] Order placed confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
       } else {
-        console.log('[email] HTML PNG returned null for placed confirmation, trying SVG→PNG fallback...');
-        const fallbackPng = await generateInvoicePngFromSvgBuffer({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Invoice',
-        });
-        if (fallbackPng) {
-          finalInvoiceBuffer = Buffer.from(fallbackPng);
-          console.log('[email] SVG→PNG fallback generated for placed confirmation:', finalInvoiceBuffer.length, 'bytes');
-        }
+        console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
       }
     } catch (invoiceError) {
       console.error('[email] PNG generation error for order placed confirmation:', orderId, ':', invoiceError?.message);
@@ -962,15 +944,7 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const getPublicBaseUrl = () => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  return (
-    (isProduction ? process.env.CLIENT_URL_PROD : process.env.CLIENT_URL) ||
-    process.env.CLIENT_URL_PROD ||
-    process.env.CLIENT_URL ||
-    ''
-  );
-};
+const getPublicBaseUrl = () => getPublicSiteUrl();
 
 const buildProductPageUrl = (productId) =>
   `${getPublicBaseUrl()}/#/products/view/${productId}`;

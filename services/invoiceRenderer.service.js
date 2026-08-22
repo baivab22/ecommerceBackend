@@ -435,29 +435,43 @@ const _loadPuppeteer = () => {
 
 const _launchBrowser = async () => {
   const puppeteer = _loadPuppeteer();
-  if (!puppeteer) return null;
-  return puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--single-process',
-      '--font-render-hinting=none',
-    ],
-  });
+  if (!puppeteer) {
+    return { browser: null, error: 'puppeteer is not installed' };
+  }
+  try {
+    const browser = await puppeteer.launch({
+      // NOTE: 'new' is deprecated/removed in recent puppeteer majors; boolean
+      // true maps to the modern headless mode on every supported version.
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--font-render-hinting=none',
+      ],
+    });
+    return { browser, error: null };
+  } catch (err) {
+    return { browser: null, error: err.message };
+  }
 };
 
 const generateInvoicePngBuffer = async (params) => {
   const data = params?.invoiceNo ? params : extractInvoiceData(params);
   let browser;
   try {
-    browser = await _launchBrowser();
-    if (!browser) {
-      console.error('[invoice] Could not launch browser for PNG generation');
+    const launched = await _launchBrowser();
+    if (!launched.browser) {
+      // Surface WHY (missing system libs on shared hosting is the usual cause)
+      // so production incidents are debuggable from logs alone.
+      console.error(
+        '[invoice] Browser launch failed — will fall back to vector SVG invoice:',
+        launched.error
+      );
       return null;
     }
+    browser = launched.browser;
     const html = buildInvoiceHtml({ ...data, _logoDataUri: getLogoDataUri() });
     const page = await browser.newPage();
     await page.setViewport({ width: 1264, height: 1600, deviceScaleFactor: 2 });
@@ -479,17 +493,120 @@ const generateInvoicePngBuffer = async (params) => {
   }
 };
 
-const generateInvoiceSvgBuffer = (params) => {
-  const data = params?.invoiceNo ? params : extractInvoiceData(params);
-  const html = buildInvoiceHtml({ ...data, _logoDataUri: getLogoDataUri() });
-  return Buffer.from(html, 'utf8');
+// ─── VECTOR SVG INVOICE (no-headless-Chromium fallback) ──────────────────────
+// A genuine <svg> document — NOT HTML renamed to .svg — so the attachment is a
+// valid image that opens correctly in any browser/viewer when Puppeteer cannot
+// run on the host (typical on shared hosting without Chrome's system libs).
+
+const buildInvoiceSvgMarkup = (data) => {
+  const W = 800;
+  const M = 40;
+  const rowH = 36;
+  const headerRowH = 44;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const font = 'Arial, Helvetica, sans-serif';
+
+  const tableTop = 400;
+  const tableBottom = tableTop + headerRowH + Math.max(items.length, 1) * rowH;
+
+  let totalsY = tableBottom + 36;
+  const totalsRows = [['Subtotal', data.subtotal]];
+  if (Number(data.shippingFee) > 0) totalsRows.push(['Shipping', data.shippingFee]);
+  if (Number(data.giftBoxCharge) > 0) totalsRows.push(['Gift Box', data.giftBoxCharge]);
+  const grandTotalY = totalsY + totalsRows.length * 28 + 20;
+  const footerY = grandTotalY + 60;
+  const H = footerY + 70;
+
+  const p = [];
+  const T = (x, y, size, fill, content, extra = '') =>
+    `<text x="${x}" y="${y}" font-family="${font}" font-size="${size}" fill="${fill}"${extra}>${content}</text>`;
+
+  // Background + header band
+  p.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`);
+  p.push(`<rect x="0" y="0" width="${W}" height="120" fill="#111827"/>`);
+  p.push(T(M, 56, 26, '#ffffff', 'Aabhushan Gallery', ' font-weight="bold"'));
+  p.push(T(M, 84, 13, '#9ca3af', escapeHtml(String(data.seller?.address || ''))));
+  p.push(
+    T(
+      M,
+      104,
+      13,
+      '#9ca3af',
+      escapeHtml(`${data.seller?.phone || ''}   |   ${data.seller?.email || ''}`)
+    )
+  );
+  p.push(T(W - M, 60, 28, '#ffffff', 'INVOICE', ' text-anchor="end" font-weight="bold"'));
+  p.push(T(W - M, 86, 14, '#9ca3af', escapeHtml(String(data.title || 'Order Confirmation')), ' text-anchor="end"'));
+
+  // Meta
+  p.push(T(M, 172, 15, '#6b7280', `Invoice No: <tspan fill="#111827" font-weight="bold">${escapeHtml(String(data.invoiceNo || 'N/A'))}</tspan>`));
+  p.push(T(M, 196, 14, '#6b7280', `Date: <tspan fill="#111827">${escapeHtml(String(data.date || 'N/A'))}</tspan>`));
+
+  // Customer block
+  p.push(T(M, 250, 12, '#9ca3af', 'BILLED TO', ' letter-spacing="1"'));
+  p.push(T(M, 276, 17, '#111827', escapeHtml(truncate(data.customer?.name || 'Valued Customer', 44)), ' font-weight="bold"'));
+  if (data.customer?.address && data.customer.address !== 'N/A') {
+    p.push(T(M, 300, 13, '#374151', escapeHtml(truncate(data.customer.address, 70))));
+  }
+  p.push(T(M, data.customer?.address && data.customer.address !== 'N/A' ? 320 : 300, 13, '#374151', escapeHtml(`Phone: ${data.customer?.phone || 'N/A'}`)));
+  if (data.customer?.email && data.customer.email !== 'N/A') {
+    p.push(T(M, data.customer?.address && data.customer.address !== 'N/A' ? 340 : 320, 13, '#374151', escapeHtml(truncate(String(data.customer.email), 60))));
+  }
+
+  // Table header
+  p.push(`<rect x="${M}" y="${tableTop}" width="${W - 2 * M}" height="${headerRowH}" fill="#f3f4f6"/>`);
+  p.push(T(M + 10, tableTop + 28, 12, '#6b7280', 'ITEM', ' letter-spacing="1"'));
+  p.push(T(500, tableTop + 28, 12, '#6b7280', 'QTY', ' text-anchor="middle" letter-spacing="1"'));
+  p.push(T(650, tableTop + 28, 12, '#6b7280', 'UNIT PRICE', ' text-anchor="end" letter-spacing="1"'));
+  p.push(T(W - M - 10, tableTop + 28, 12, '#6b7280', 'AMOUNT', ' text-anchor="end" letter-spacing="1"'));
+  p.push(`<line x1="${M}" y1="${tableTop + headerRowH}" x2="${W - M}" y2="${tableTop + headerRowH}" stroke="#d1d5db" stroke-width="1"/>`);
+
+  // Item rows
+  const rows = items.length
+    ? items
+    : [{ name: 'No items', quantity: '', unitPrice: null, amount: null }];
+  rows.forEach((item, i) => {
+    const y = tableTop + headerRowH + i * rowH + 24;
+    p.push(T(M + 10, y, 13, '#111827', escapeHtml(truncate(item.name || 'Product', 52))));
+    if (items.length) {
+      p.push(T(500, y, 13, '#374151', String(item.quantity ?? ''), ' text-anchor="middle"'));
+      p.push(T(650, y, 13, '#374151', item.unitPrice === null ? '' : escapeHtml(formatCurrency(item.unitPrice, data.currency)), ' text-anchor="end"'));
+      p.push(T(W - M - 10, y, 13, '#111827', item.amount === null ? '' : escapeHtml(formatCurrency(item.amount, data.currency)), ' text-anchor="end" font-weight="bold"'));
+    }
+    if (i < rows.length - 1) {
+      const ly = tableTop + headerRowH + (i + 1) * rowH;
+      p.push(`<line x1="${M}" y1="${ly}" x2="${W - M}" y2="${ly}" stroke="#f3f4f6" stroke-width="1"/>`);
+    }
+  });
+
+  // Totals
+  totalsRows.forEach(([label, value]) => {
+    p.push(T(600, totalsY, 13, '#6b7280', escapeHtml(label), ' text-anchor="end"'));
+    p.push(T(W - M - 10, totalsY, 13, '#374151', escapeHtml(formatCurrency(value, data.currency)), ' text-anchor="end"'));
+    totalsY += 28;
+  });
+  p.push(`<line x1="${W - M - 260}" y1="${grandTotalY - 24}" x2="${W - M}" y2="${grandTotalY - 24}" stroke="#111827" stroke-width="1"/>`);
+  p.push(T(600, grandTotalY, 16, '#111827', 'GRAND TOTAL', ' text-anchor="end" font-weight="bold"'));
+  p.push(T(W - M - 10, grandTotalY, 18, '#111827', escapeHtml(formatCurrency(data.totalAmount, data.currency)), ' text-anchor="end" font-weight="bold"'));
+
+  // Footer
+  p.push(T(W / 2, footerY, 13, '#6b7280', 'Thank you for shopping with Aabhushan Gallery!', ' text-anchor="middle"'));
+  p.push(T(W / 2, footerY + 22, 11, '#9ca3af', escapeHtml('This is a computer-generated invoice.'), ' text-anchor="middle"'));
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    p.join('') +
+    `</svg>`
+  );
 };
 
-// Keep old export names for backward compat with emailServices.js
 const buildInvoiceSvg = (params) => {
   const data = params?.invoiceNo ? params : extractInvoiceData(params);
-  return buildInvoiceHtml({ ...data, _logoDataUri: getLogoDataUri() });
+  return buildInvoiceSvgMarkup(data);
 };
+
+const generateInvoiceSvgBuffer = (params) =>
+  Buffer.from(buildInvoiceSvg(params), 'utf8');
 
 const generateInvoicePngFromSvgBuffer = generateInvoicePngBuffer;
 

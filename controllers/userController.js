@@ -7,7 +7,7 @@ const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require('google-auth-library');
 const Orders = require("../modals/orderModal");
 const axios = require('axios'); // Add this for Facebook API calls
-const { EMAIL_CONFIG, transporter } = require("../services/mailConfig");
+const { EMAIL_CONFIG, transporter, getPublicSiteUrl } = require("../services/mailConfig");
 const {
   getLogoAttachment,
   getLogoMarkup,
@@ -742,16 +742,8 @@ exports.forgotPassword = async (req, res) => {
     user.resetPasswordExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
     await user.save();
 
-    // Determine frontend URL based on environment
-    const isProduction = process.env.NODE_ENV === "production";
-    const frontendURL = isProduction
-      ? process.env.CLIENT_URL_PROD
-      : process.env.CLIENT_URL;
-
-    if (!frontendURL) {
-      console.error("CLIENT_URL is not defined in .env");
-      return res.status(500).json({ message: "Server misconfigured" });
-    }
+    // Public storefront URL — shared helper, never localhost (see mailConfig)
+    const frontendURL = getPublicSiteUrl();
 
     // Build hash route reset link
     const resetLink = `${frontendURL}/#/reset-password?resetToken=${resetToken}`;

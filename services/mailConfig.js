@@ -20,8 +20,29 @@ const EMAIL_CONFIG = {
   sender: SMTP_CONFIG.fromAddress,
   admin: process.env.ADMIN_EMAIL || SMTP_CONFIG.fromAddress,
   adminRecipients: parseRecipients(process.env.ADMIN_EMAIL || SMTP_CONFIG.fromAddress),
-  domain: process.env.MAIL_DOMAIN || 'aabhushangallery.com',
+  domain: process.env.MAIL_DOMAIN || 'abhushangallery.com',
 };
+
+const cleanUrl = (value) =>
+  String(value || '').trim().replace(/\/+$/, '');
+
+/**
+ * Public storefront origin used in links inside emails (restock alerts,
+ * password resets...). Deliberately NOT gated on NODE_ENV — many hosts
+ * (cPanel etc.) never set it, which used to leak localhost URLs into
+ * production emails.
+ *
+ * Priority:
+ *   PUBLIC_SITE_URL  → explicit override, recommended in every environment
+ *   CLIENT_URL_PROD  → production storefront URL
+ *   https://MAIL_DOMAIN → last resort; always a real public domain
+ *   (CLIENT_URL/localhost is intentionally NEVER used — a localhost link in
+ *    an email is never useful.)
+ */
+const getPublicSiteUrl = () =>
+  cleanUrl(process.env.PUBLIC_SITE_URL) ||
+  cleanUrl(process.env.CLIENT_URL_PROD) ||
+  `https://${EMAIL_CONFIG.domain}`;
 
 const MESSAGE_ID_HASH = process.env.MAIL_DOMAIN_HASH || 'abg001';
 
@@ -81,4 +102,5 @@ module.exports = {
   EMAIL_CONFIG,
   transporter,
   buildCommonHeaders,
+  getPublicSiteUrl,
 };
