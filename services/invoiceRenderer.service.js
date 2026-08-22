@@ -73,10 +73,10 @@ const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, t
     currency,
     title,
     seller: {
-      name: 'Aabhushan Gallery',
+      name: 'Abhushan Gallery',
       address: 'Kalimati, Kathmandu, Nepal',
       phone: '+977 9861698400',
-      email: senderEmail || 'support@aabhushangallery.com',
+      email: senderEmail || 'support@abhushangallery.com',
     },
     customer: {
       name: customerName || order?.fullName || 'Valued Customer',
@@ -93,29 +93,83 @@ const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, t
   };
 };
 
+// ─── DATA NORMALIZATION ──────────────────────────────────────────────────────
+// Accepts either extractInvoiceData() output or a raw InvoiceData object and
+// guarantees every derived monetary value is computed, never trusted:
+//   amount     = quantity × unitPrice          (per line)
+//   subtotal   = Σ amount
+//   totalAmount= subtotal + shipping + giftBox + other charges
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+const normalizeInvoiceData = (raw) => {
+  const data = { ...raw };
+  data.currency = data.currency || 'NPR';
+  data.title = data.title || 'Order Confirmation';
+
+  const items = (Array.isArray(data.items) ? data.items : []).map((it) => {
+    const quantity = Number(it?.quantity ?? 1) || 0;
+    const unitPrice = round2(it?.unitPrice ?? 0);
+    const amount =
+      it?.amount !== undefined && it?.amount !== null && !isNaN(Number(it.amount))
+        ? round2(it.amount)
+        : round2(quantity * unitPrice);
+    return { ...it, quantity, unitPrice, amount };
+  });
+
+  const subtotal = round2(items.reduce((s, i) => s + i.amount, 0));
+  const shippingFee = round2(data.shippingFee);
+  const giftBoxCharge = round2(data.giftBoxCharge);
+  const otherCharges = (Array.isArray(data.otherCharges) ? data.otherCharges : [])
+    .map((c) => ({ label: String(c?.label ?? 'Charge'), amount: round2(c?.amount) }));
+
+  const computedTotal = round2(
+    subtotal +
+      shippingFee +
+      giftBoxCharge +
+      otherCharges.reduce((s, c) => s + c.amount, 0)
+  );
+  // Trust an explicit totalAmount only if it is a valid number; otherwise compute.
+  const explicitTotal = Number(data.totalAmount);
+
+  return {
+    ...data,
+    items,
+    subtotal,
+    shippingFee,
+    giftBoxCharge,
+    otherCharges,
+    totalAmount: !isNaN(explicitTotal) ? round2(explicitTotal) : computedTotal,
+    totalItems: items.reduce((s, i) => s + i.quantity, 0),
+  };
+};
+
 // ─── HTML TEMPLATE ───────────────────────────────────────────────────────────
 
 const buildInvoiceHtml = (params) => {
-  const data = params?.invoiceNo ? params : extractInvoiceData(params);
+  const data = normalizeInvoiceData(params?.invoiceNo ? params : extractInvoiceData(params));
   const logoDataUri = data._logoDataUri || getLogoDataUri();
 
   const itemRows = data.items.map((item, i) => `
     <tr>
-      <td style="padding:16px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:8%; vertical-align:middle;">${i + 1}</td>
-      <td style="padding:16px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; font-weight:500; width:42%; vertical-align:middle; word-break:break-word;">${escapeHtml(truncate(item.name, 50))}${item.color ? ` <span style="color:#667085;font-weight:400;">(${escapeHtml(item.color)})</span>` : ''}</td>
-      <td style="padding:16px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:12%; text-align:center; vertical-align:middle;">${item.quantity}</td>
-      <td style="padding:16px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:19%; text-align:right; vertical-align:middle;">${formatCurrency(item.unitPrice, data.currency)}</td>
-      <td style="padding:16px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; font-weight:600; width:19%; text-align:right; vertical-align:middle;">${formatCurrency(item.amount, data.currency)}</td>
+      <td style="padding:14px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:8%; vertical-align:middle;">${i + 1}</td>
+      <td style="padding:14px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; font-weight:500; width:42%; vertical-align:middle; word-break:break-word;">${escapeHtml(truncate(item.name, 50))}${item.color ? ` <span style="color:#667085;font-weight:400;">(${escapeHtml(item.color)})</span>` : ''}</td>
+      <td style="padding:14px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:12%; text-align:center; vertical-align:middle;">${item.quantity}</td>
+      <td style="padding:14px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; width:19%; text-align:right; vertical-align:middle;">${formatCurrency(item.unitPrice, data.currency)}</td>
+      <td style="padding:14px 18px; border:1px solid #DDE2E7; font-size:18px; color:#344054; font-weight:600; width:19%; text-align:right; vertical-align:middle;">${formatCurrency(item.amount, data.currency)}</td>
     </tr>`).join('');
 
   const summaryRows = [
     { label: 'Subtotal', value: formatCurrency(data.subtotal, data.currency) },
     { label: 'Shipping Fee', value: formatCurrency(data.shippingFee, data.currency) },
     { label: 'Gift Box Charge', value: formatCurrency(data.giftBoxCharge, data.currency) },
+    ...(data.otherCharges || []).map((c) => ({
+      label: c.label,
+      value: formatCurrency(c.amount, data.currency),
+    })),
   ];
 
   const summaryHtml = summaryRows.map((r) => `
-    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0;">
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
       <span style="font-size:17px; color:#667085;">${r.label}</span>
       <span style="font-size:17px; color:#344054; font-weight:500;">${r.value}</span>
     </div>`).join('');
@@ -163,9 +217,11 @@ const buildInvoiceHtml = (params) => {
       gap:0;
     }
     .logo-img{
-      width:200px;
-      height:auto;
-      max-height:300px;
+      /* Size by HEIGHT so the real brand mark fills the ~290px header box
+         without distortion (logo aspect ratio ≈ 0.8). */
+      height:288px;
+      width:auto;
+      max-width:230px;
       object-fit:contain;
       display:block;
     }
@@ -193,7 +249,7 @@ const buildInvoiceHtml = (params) => {
       display:grid;
       grid-template-columns:repeat(3,1fr);
       gap:18px;
-      padding:28px 35px;
+      padding:24px 35px;
     }
     .summary-card{
       border:1px solid #DDE2E7;
@@ -224,7 +280,7 @@ const buildInvoiceHtml = (params) => {
       display:grid;
       grid-template-columns:1fr 1fr;
       gap:18px;
-      padding:0 35px 28px;
+      padding:0 35px 24px;
     }
     .billing-card{
       border:1px solid #DDE2E7;
@@ -252,7 +308,7 @@ const buildInvoiceHtml = (params) => {
 
     /* ── ITEMS TABLE ── */
     .table-wrap{
-      padding:0 35px 28px;
+      padding:0 35px 24px;
     }
     .items-table{
       width:100%;
@@ -278,7 +334,7 @@ const buildInvoiceHtml = (params) => {
 
     /* ── TOTALS ── */
     .totals-section{
-      padding:0 35px 32px;
+      padding:0 35px 26px;
       display:flex;
       justify-content:flex-end;
     }
@@ -286,19 +342,19 @@ const buildInvoiceHtml = (params) => {
       width:450px;
       border:1px solid #DDE2E7;
       border-radius:14px;
-      padding:22px 24px;
+      padding:18px 22px;
       background:#F9FAFB;
     }
     .totals-divider{
       border:none;
       border-top:1px solid #DDE2E7;
-      margin:10px 0;
+      margin:8px 0;
     }
     .totals-total{
       display:flex;
       justify-content:space-between;
       align-items:center;
-      padding:12px 0 4px;
+      padding:10px 0 0;
     }
     .totals-total .t-label{
       font-size:20px;
@@ -313,7 +369,7 @@ const buildInvoiceHtml = (params) => {
 
     /* ── FOOTER ── */
     .footer{
-      padding:24px 35px 32px;
+      padding:22px 35px 28px;
       text-align:center;
     }
     .footer-divider{
@@ -362,7 +418,6 @@ const buildInvoiceHtml = (params) => {
     <div class="billing-row">
       <div class="billing-card">
         <div class="card-title">From</div>
-        <p class="detail">${escapeHtml(data.seller.name)}</p>
         <p class="detail">${escapeHtml(data.seller.address)}</p>
         <p class="detail">Phone: ${escapeHtml(data.seller.phone)}</p>
         <p class="detail">Email: ${escapeHtml(data.seller.email)}</p>
@@ -458,7 +513,7 @@ const _launchBrowser = async () => {
 };
 
 const generateInvoicePngBuffer = async (params) => {
-  const data = params?.invoiceNo ? params : extractInvoiceData(params);
+  const data = normalizeInvoiceData(params?.invoiceNo ? params : extractInvoiceData(params));
   let browser;
   try {
     const launched = await _launchBrowser();
@@ -601,7 +656,7 @@ const buildInvoiceSvgMarkup = (data) => {
 };
 
 const buildInvoiceSvg = (params) => {
-  const data = params?.invoiceNo ? params : extractInvoiceData(params);
+  const data = normalizeInvoiceData(params?.invoiceNo ? params : extractInvoiceData(params));
   return buildInvoiceSvgMarkup(data);
 };
 
@@ -617,5 +672,6 @@ module.exports = {
   generateInvoicePngFromSvgBuffer,
   generateInvoiceSvgBuffer,
   extractInvoiceData,
+  normalizeInvoiceData,
   formatCurrency,
 };
