@@ -577,24 +577,72 @@ const generateInvoicePngWithSharp = async (dataOrParams) => {
 // A pixel-accurate replica of the HTML invoice rendered as pure SVG — same
 // layout coordinates as the Puppeteer template — so hosts without Chrome
 // (typical cPanel/shared hosting) still get the exact reference design.
+//
+// TEXT IS RENDERED AS VECTOR PATHS using the bundled Liberation Sans TTFs, so
+// output is identical on ANY host and never depends on system fonts installed
+// (bare cPanel containers have none, which used to produce tofu boxes).
 // Rasterized to PNG via sharp; also usable standalone when even sharp fails.
 
-// Greedy word-wrap approximating Helvetica metrics (~0.52em avg glyph width).
-const wrapTextForSvg = (value, maxWidthPx, fontSize, bold = false) => {
-  const text = String(value ?? '');
-  const charW = fontSize * (bold ? 0.56 : 0.52);
-  const maxChars = Math.max(8, Math.floor(maxWidthPx / charW));
-  const words = text.split(/\s+/).filter(Boolean);
+const FONT_DIR = path.join(__dirname, '../assets/fonts');
+const _invoiceFontCache = {};
+
+const _loadInvoiceFont = (weight) => {
+  const key = weight >= 600 ? 'Bold' : 'Regular';
+  if (_invoiceFontCache[key] !== undefined) return _invoiceFontCache[key];
+  try {
+    // Lazy require so missing opentype.js only degrades this fallback path.
+    const opentype = require('opentype.js');
+    const buf = fs.readFileSync(path.join(FONT_DIR, `LiberationSans-${key}.ttf`));
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    _invoiceFontCache[key] = opentype.parse(ab);
+  } catch (err) {
+    console.error(`[invoice] Could not load bundled font (${key}):`, err.message);
+    _invoiceFontCache[key] = null;
+  }
+  return _invoiceFontCache[key];
+};
+
+const _measureTextWidth = (text, size, weight = 400) => {
+  const font = _loadInvoiceFont(weight);
+  if (font) return font.getAdvanceWidth(String(text), size);
+  return String(text).length * size * (weight >= 600 ? 0.56 : 0.52);
+};
+
+// Renders a text run as vector <path> data anchored at x,y baseline.
+// Falls back to plain <text> only if the bundled font could not be loaded.
+const svgText = ({ x, y, size, fill, text, weight = 400, anchor = 'start', spacing = 0 }) => {
+  const content = String(text ?? '');
+  const bold = weight >= 600;
+  const font = _loadInvoiceFont(bold ? 700 : 400);
+  if (!font) {
+    const anchorAttr = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
+    return `<text x="${x}" y="${y}" font-family="Helvetica, Arial, sans-serif" font-size="${size}" fill="${fill}"${anchorAttr}>${escapeHtml(content)}</text>`;
+  }
+  const opts = spacing ? { tracking: Math.round((spacing / size) * 1000) } : undefined;
+  const width = font.getAdvanceWidth(content, size, opts);
+  let startX = x;
+  if (anchor === 'end') startX = x - width;
+  else if (anchor === 'middle') startX = x - width / 2;
+  const p = font.getPath(content, startX, y, size, opts);
+  return `<path d="${p.toPathData(2)}" fill="${fill}"/>`;
+};
+
+// Greedy word-wrap driven by real font metrics when available.
+const wrapTextForSvg = (value, maxWidthPx, fontSize, weight = 400) => {
+  const words = String(value ?? '').split(/\s+/).filter(Boolean);
   if (!words.length) return [''];
   const lines = [];
   let line = '';
   for (const word of words) {
     const candidate = line ? `${line} ${word}` : word;
-    if (candidate.length <= maxChars) {
+    if (_measureTextWidth(candidate, fontSize, weight) <= maxWidthPx) {
       line = candidate;
     } else {
       if (line) lines.push(line);
-      line = word.length > maxChars ? word.slice(0, maxChars - 1) + '…' : word;
+      line = word;
+      while (_measureTextWidth(line, fontSize, weight) > maxWidthPx && line.length > 8)
+        line = line.slice(0, -2);
+      if (line !== word) line += '…';
     }
   }
   if (line) lines.push(line);
@@ -606,7 +654,6 @@ const buildInvoiceSvgMarkup = (data) => {
   const W = 1264;
   const PAD_X = 35;
   const CONTENT_W = W - PAD_X * 2; // 1194
-  const FONT = 'Helvetica, Arial, sans-serif';
   const items = d.items;
 
   // ── layout constants mirroring the verified HTML template ──
@@ -624,9 +671,16 @@ const buildInvoiceSvgMarkup = (data) => {
     { text: `Phone: ${d.customer.phone}` },
     { text: `Email: ${d.customer.email}` },
   ];
-  const fromLines = wrapTextForSvg(d.seller.address, CARD_INNER_W, 18).length + 2; // phone + email
-  const billCardH = Math.max(235, BILL_PAD * 2 + 25 + 16 + billToFields.length * DETAIL_LH);
-  const fromCardH = Math.max(235, BILL_PAD * 2 + 25 + 16 + fromLines * DETAIL_LH);
+  const fromLines =
+    wrapTextForSvg(d.seller.address, CARD_INNER_W, 18).length + 2; // phone + email
+  const billCardH = Math.max(
+    235,
+    BILL_PAD * 2 + 25 + 16 + billToFields.length * DETAIL_LH
+  );
+  const fromCardH = Math.max(
+    235,
+    BILL_PAD * 2 + 25 + 16 + fromLines * DETAIL_LH
+  );
   const CARD_H_MAX = Math.max(billCardH, fromCardH);
 
   const TABLE_TOP = BILL_TOP + CARD_H_MAX + 24;
@@ -651,9 +705,7 @@ const buildInvoiceSvgMarkup = (data) => {
     })),
   ];
   const TOTALS_W = 450;
-  const TOTALS_H = Math.round(
-    36 + totalsRows.length * 36 + 17 + 40
-  );
+  const TOTALS_H = 36 + totalsRows.length * 36 + 17 + 40;
   const TOTALS_TOP = TABLE_BOTTOM + 24;
   const TOTALS_X = W - PAD_X - TOTALS_W;
 
@@ -665,9 +717,6 @@ const buildInvoiceSvgMarkup = (data) => {
   p.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`);
   p.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="20" fill="#ffffff" stroke="#E4E7EC"/>`);
 
-  const T = (x, y, size, fill, content, extra = '') =>
-    `<text x="${x}" y="${y}" font-family="${FONT}" font-size="${size}" fill="${fill}"${extra}>${escapeHtml(content)}</text>`;
-
   // ── HEADER ──
   p.push(`<path d="M ${W} 20 A 20 20 0 0 0 ${W - 20} 0 L 20 0 A 20 20 0 0 0 0 20 L 0 ${HEADER_H} L ${W} ${HEADER_H} Z" fill="#F4F8FC"/>`);
   p.push(`<line x1="0" y1="${HEADER_H + 0.5}" x2="${W}" y2="${HEADER_H + 0.5}" stroke="#E0E4E8" stroke-width="1"/>`);
@@ -676,10 +725,10 @@ const buildInvoiceSvgMarkup = (data) => {
   if (logoDataUri) {
     p.push(`<image x="46" y="39" height="288" preserveAspectRatio="xMinYMid meet" xlink:href="${logoDataUri}"/>`);
   } else {
-    p.push(T(46, 200, 32, '#111827', d.seller.name, ' font-weight="bold"'));
+    p.push(svgText({ x: 46, y: 200, size: 32, fill: '#111827', text: d.seller.name, weight: 700 }));
   }
-  p.push(T(W - 45, 178, 44, '#111827', d.title, ' font-weight="bold" text-anchor="end" letter-spacing="-0.5"'));
-  p.push(T(W - 45, 218, 20, '#475569', `Order #${d.orderNo}`, ' text-anchor="end"'));
+  p.push(svgText({ x: W - 45, y: 178, size: 44, fill: '#111827', text: d.title, weight: 700, anchor: 'end', spacing: -0.5 }));
+  p.push(svgText({ x: W - 45, y: 218, size: 20, fill: '#475569', text: `Order #${d.orderNo}`, anchor: 'end' }));
 
   // ── SUMMARY CARDS ──
   const sumCards = [
@@ -689,18 +738,19 @@ const buildInvoiceSvgMarkup = (data) => {
   ];
   sumCards.forEach((c, i) => {
     const cx = PAD_X + i * (386 + 18);
-    p.push(`<rect x="${cx}" y="${SUM_TOP + 24}" width="386" height="${CARD_H}" rx="12" fill="#ffffff" stroke="#DDE2E7"/>`);
-    p.push(T(cx + 22, SUM_TOP + 24 + 31, 16, '#667085', c.label, ' letter-spacing="0.5"'));
-    p.push(T(cx + 22, SUM_TOP + 24 + 52, 20, '#172033', c.value, ' font-weight="bold"'));
+    const cy = SUM_TOP + 24;
+    p.push(`<rect x="${cx}" y="${cy}" width="386" height="${CARD_H}" rx="12" fill="#ffffff" stroke="#DDE2E7"/>`);
+    p.push(svgText({ x: cx + 22, y: cy + 31, size: 16, fill: '#667085', text: c.label, spacing: 0.5 }));
+    p.push(svgText({ x: cx + 22, y: cy + 52, size: 20, fill: '#172033', text: c.value, weight: 700 }));
   });
 
   // ── BILLING CARDS ──
   const drawBillingCard = (cx, title, fields) => {
     p.push(`<rect x="${cx}" y="${BILL_TOP}" width="587" height="${CARD_H_MAX}" rx="14" fill="#ffffff" stroke="#DDE2E7"/>`);
-    p.push(T(cx + 28, BILL_TOP + 44, 21, '#101828', title, ' font-weight="bold"'));
+    p.push(svgText({ x: cx + 28, y: BILL_TOP + 44, size: 21, fill: '#101828', text: title, weight: 700 }));
     let by = BILL_TOP + 89;
     for (const f of fields) {
-      p.push(T(cx + 28, by, 18, f.bold ? '#101828' : '#344054', f.text, f.bold ? ' font-weight="bold"' : ''));
+      p.push(svgText({ x: cx + 28, y: by, size: 18, fill: f.bold ? '#101828' : '#344054', text: f.text, weight: f.bold ? 700 : 400 }));
       by += DETAIL_LH;
     }
   };
@@ -715,28 +765,26 @@ const buildInvoiceSvgMarkup = (data) => {
   p.push(`<rect x="${colX[0]}" y="${TABLE_TOP}" width="${CONTENT_W}" height="${HEAD_ROW_H}" fill="#F4F8FC"/>`);
   const headers = ['#', 'Item', 'Qty', 'Unit Price', 'Amount'];
   headers.forEach((h, i) => {
-    const size = 16;
     const baseY = TABLE_TOP + 30;
-    if (i === 0) p.push(T(colX[i] + 18, baseY, size, '#344054', h, ' font-weight="bold"'));
-    else if (i === 1) p.push(T(colX[i] + 18, baseY, size, '#344054', h, ' font-weight="bold"'));
+    if (i <= 1)
+      p.push(svgText({ x: colX[i] + 18, y: baseY, size: 16, fill: '#344054', text: h, weight: 600 }));
     else if (i === 2)
-      p.push(T((colX[i] + colX[i + 1]) / 2, baseY, size, '#344054', h, ' font-weight="bold" text-anchor="middle"'));
+      p.push(svgText({ x: (colX[i] + colX[i + 1]) / 2, y: baseY, size: 16, fill: '#344054', text: h, weight: 600, anchor: 'middle' }));
     else
-      p.push(T(colX[i + 1] - 18, baseY, size, '#344054', h, ' font-weight="bold" text-anchor="end"'));
+      p.push(svgText({ x: colX[i + 1] - 18, y: baseY, size: 16, fill: '#344054', text: h, weight: 600, anchor: 'end' }));
   });
 
   let rowY = TABLE_TOP + HEAD_ROW_H;
   items.forEach((it, i) => {
     const rh = rowHeights[i];
     const baseY = rowY + 31;
-    p.push(T(colX[0] + 18, baseY, 18, '#344054', i + 1));
-    const nameLines = wrapTextForSvg(it.name, itemCellW, 18);
-    nameLines.forEach((line, li) =>
-      p.push(T(colX[1] + 18, baseY + li * DETAIL_LH, 18, '#344054', line, ' font-weight="500"'))
+    p.push(svgText({ x: colX[0] + 18, y: baseY, size: 18, fill: '#344054', text: i + 1 }));
+    wrapTextForSvg(it.name, itemCellW, 18).forEach((line, li) =>
+      p.push(svgText({ x: colX[1] + 18, y: baseY + li * DETAIL_LH, size: 18, fill: '#344054', text: line }))
     );
-    p.push(T((colX[2] + colX[3]) / 2, baseY, 18, '#344054', it.quantity, ' text-anchor="middle"'));
-    p.push(T(colX[4] - 18, baseY, 18, '#344054', formatCurrency(it.unitPrice, d.currency), ' text-anchor="end"'));
-    p.push(T(colX[5] - 18, baseY, 18, '#344054', formatCurrency(it.amount, d.currency), ' text-anchor="end" font-weight="bold"'));
+    p.push(svgText({ x: (colX[2] + colX[3]) / 2, y: baseY, size: 18, fill: '#344054', text: it.quantity, anchor: 'middle' }));
+    p.push(svgText({ x: colX[4] - 18, y: baseY, size: 18, fill: '#344054', text: formatCurrency(it.unitPrice, d.currency), anchor: 'end' }));
+    p.push(svgText({ x: colX[5] - 18, y: baseY, size: 18, fill: '#344054', text: formatCurrency(it.amount, d.currency), weight: 700, anchor: 'end' }));
     rowY += rh;
   });
   // grid lines
@@ -753,19 +801,19 @@ const buildInvoiceSvgMarkup = (data) => {
   p.push(`<rect x="${TOTALS_X}" y="${TOTALS_TOP}" width="${TOTALS_W}" height="${TOTALS_H}" rx="14" fill="#F9FAFB" stroke="#DDE2E7"/>`);
   let ty = TOTALS_TOP + 44;
   totalsRows.forEach((r) => {
-    p.push(T(TOTALS_X + 22, ty, 17, '#667085', r.label));
-    p.push(T(TOTALS_X + TOTALS_W - 22, ty, 17, '#344054', r.value, ' font-weight="500" text-anchor="end"'));
+    p.push(svgText({ x: TOTALS_X + 22, y: ty, size: 17, fill: '#667085', text: r.label }));
+    p.push(svgText({ x: TOTALS_X + TOTALS_W - 22, y: ty, size: 17, fill: '#344054', text: r.value, anchor: 'end' }));
     ty += 36;
   });
   const dividerY = ty - 36 + 25;
   p.push(`<line x1="${TOTALS_X + 1}" y1="${dividerY}" x2="${TOTALS_X + TOTALS_W - 1}" y2="${dividerY}" stroke="#DDE2E7" stroke-width="1"/>`);
   const totalBase = dividerY + 42;
-  p.push(T(TOTALS_X + 22, totalBase, 20, '#101828', 'Total', ' font-weight="bold"'));
-  p.push(T(TOTALS_X + TOTALS_W - 22, totalBase, 22, '#111827', formatCurrency(d.totalAmount, d.currency), ' font-weight="bold" text-anchor="end"'));
+  p.push(svgText({ x: TOTALS_X + 22, y: totalBase, size: 20, fill: '#101828', text: 'Total', weight: 700 }));
+  p.push(svgText({ x: TOTALS_X + TOTALS_W - 22, y: totalBase, size: 22, fill: '#111827', text: formatCurrency(d.totalAmount, d.currency), weight: 700, anchor: 'end' }));
 
   // ── FOOTER ──
   p.push(`<line x1="${PAD_X}" y1="${DIVIDER_Y}" x2="${W - PAD_X}" y2="${DIVIDER_Y}" stroke="#D0D5DD" stroke-width="2" stroke-dasharray="6 5"/>`);
-  p.push(T(W / 2, DIVIDER_Y + 37, 16, '#667085', 'Thank you for your order. This is a system-generated document.', ' text-anchor="middle"'));
+  p.push(svgText({ x: W / 2, y: DIVIDER_Y + 37, size: 16, fill: '#667085', text: 'Thank you for your order. This is a system-generated document.', anchor: 'middle' }));
 
   p.push('</svg>');
   return p.join('\n');
