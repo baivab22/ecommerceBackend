@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { getLogoPath } = require('./logoAsset.service');
 
-const LOGO_PATH = path.join(__dirname, '../../client/public/assets/images/logosss.png');
+const LOGO_PATH = getLogoPath();
 
 const DEFAULT_LOGO_STYLE =
   'max-width:180px;width:100%;height:auto;display:block;margin:0 auto;';
