@@ -1,23 +1,21 @@
 /**
- * Example / test renderer for the Order Confirmation invoice PNG.
+ * Example / test renderer for the A4 invoice PDF.
  *
- * Generates a PNG using the same data as the reference document so the output
- * can be visually compared against it:
+ * Generates a PDF using the same pipeline as the email attachments:
  *
  *   node scripts/renderInvoiceExample.js
  *
- * Output: server/scripts/output/invoice-example.png (+ .html for debugging)
+ * Output: server/scripts/output/invoice-example.pdf (+ .html for debugging)
  */
 
 const fs = require('fs');
 const path = require('path');
 const {
   buildInvoiceHtml,
-  generateInvoicePngBuffer,
+  generateInvoicePdfBuffer,
 } = require('../services/invoiceRenderer.service');
 
 // ─── REFERENCE EXAMPLE DATA ──────────────────────────────────────────────────
-// Mirrors the reference Order Confirmation exactly.
 const referenceInvoiceData = {
   invoiceNo: '65850',
   orderNo: '65850',
@@ -26,9 +24,9 @@ const referenceInvoiceData = {
   title: 'Order Confirmation',
 
   seller: {
-    name: 'Abhushan Gallery',
+    name: 'Aabhushan Gallery',
     address: 'Kalimati, Kathmandu, Nepal',
-    phone: '9861698400',
+    phone: '+977 9861698400',
     email: 'baivabidari876@gmail.com',
   },
 
@@ -61,25 +59,21 @@ const OUT_DIR = path.join(__dirname, 'output');
 (async () => {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  // Save HTML for debugging in a browser
   const html = buildInvoiceHtml(referenceInvoiceData);
-  const htmlPath = path.join(OUT_DIR, 'invoice-example.html');
-  fs.writeFileSync(htmlPath, html, 'utf8');
+  fs.writeFileSync(path.join(OUT_DIR, 'invoice-example.html'), html, 'utf8');
 
-  // Render PNG (falls back to SVG attachment logic in production emails when
-  // headless Chrome cannot run on the host — handled by emailServices.js)
-  const png = await generateInvoicePngBuffer(referenceInvoiceData);
-  if (!png) {
+  const pdf = await generateInvoicePdfBuffer(referenceInvoiceData);
+  if (!pdf) {
     console.error(
-      'PNG generation failed (headless Chrome unavailable on this host). ' +
+      'PDF generation failed (headless Chrome unavailable on this host). ' +
         'Emails will attach the vector SVG invoice instead.'
     );
     process.exit(1);
   }
-  const pngPath = path.join(OUT_DIR, 'invoice-example.png');
-  fs.writeFileSync(pngPath, png);
+  const pdfPath = path.join(OUT_DIR, 'invoice-example.pdf');
+  fs.writeFileSync(pdfPath, pdf);
 
-  console.log('HTML written to:', htmlPath);
-  console.log('PNG written to :', pngPath);
-  console.log('PNG size       :', `${png.length.toLocaleString()} bytes`);
+  console.log('HTML written to:', path.join(OUT_DIR, 'invoice-example.html'));
+  console.log('PDF written to :', pdfPath);
+  console.log('PDF size       :', `${pdf.length.toLocaleString()} bytes`);
 })();

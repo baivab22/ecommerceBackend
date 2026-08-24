@@ -8,7 +8,7 @@ const {
 const { buildEmailShell, getLogoAttachment } = require('./emailTemplate');
 const { Product } = require("../modals/product.modal");
 const {
-  generateInvoicePngBuffer,
+  generateInvoicePdfBuffer,
   buildInvoiceSvg,
 } = require('./invoiceRenderer.service');
 
@@ -485,13 +485,13 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
     const subject = `Order Confirmed - ${orderId}`;
 
-    // Generate invoice attachment: try PNG (Puppeteer) then SVG (no Puppeteer)
+    // Generate A4 PDF invoice attachment; fall back to vector SVG (no Puppeteer)
     let finalInvoiceBuffer = null;
-    let finalInvoiceFilename = `invoice-${orderId}.png`;
-    let finalInvoiceContentType = 'image/png';
+    let finalInvoiceFilename = `invoice-${orderId}.pdf`;
+    let finalInvoiceContentType = 'application/pdf';
 
     try {
-      const invoicePng = await generateInvoicePngBuffer({
+      const invoicePdf = await generateInvoicePdfBuffer({
         order,
         customerEmail,
         customerName,
@@ -499,14 +499,14 @@ const sendOrderConfirmationToCustomer = async (order) => {
         title: 'Order Confirmation',
       });
 
-      if (invoicePng) {
-        finalInvoiceBuffer = Buffer.from(invoicePng);
-        console.log('[email] Order confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
+      if (invoicePdf) {
+        finalInvoiceBuffer = Buffer.from(invoicePdf);
+        console.log('[email] Order confirmation PDF generated:', finalInvoiceBuffer.length, 'bytes');
       } else {
         console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
       }
     } catch (invoiceError) {
-      console.error('[email] PNG generation error for order', orderId, ':', invoiceError?.message);
+      console.error('[email] PDF generation error for order', orderId, ':', invoiceError?.message);
     }
 
     // Ultimate fallback: attach SVG directly (no Puppeteer required)
@@ -723,13 +723,13 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
 
     const subject = `Order Received - ${orderId}`;
 
-    // Generate invoice attachment: try PNG (Puppeteer) then SVG (no Puppeteer)
+    // Generate A4 PDF invoice attachment; fall back to vector SVG (no Puppeteer)
     let finalInvoiceBuffer = null;
-    let finalInvoiceFilename = `invoice-${orderId}.png`;
-    let finalInvoiceContentType = 'image/png';
+    let finalInvoiceFilename = `invoice-${orderId}.pdf`;
+    let finalInvoiceContentType = 'application/pdf';
 
     try {
-      const invoicePng = await generateInvoicePngBuffer({
+      const invoicePdf = await generateInvoicePdfBuffer({
         order,
         customerEmail,
         customerName,
@@ -737,14 +737,14 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
         title: 'Order Invoice',
       });
 
-      if (invoicePng) {
-        finalInvoiceBuffer = Buffer.from(invoicePng);
-        console.log('[email] Order placed confirmation PNG generated:', finalInvoiceBuffer.length, 'bytes');
+      if (invoicePdf) {
+        finalInvoiceBuffer = Buffer.from(invoicePdf);
+        console.log('[email] Order placed confirmation PDF generated:', finalInvoiceBuffer.length, 'bytes');
       } else {
         console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
       }
     } catch (invoiceError) {
-      console.error('[email] PNG generation error for order placed confirmation:', orderId, ':', invoiceError?.message);
+      console.error('[email] PDF generation error for order placed confirmation:', orderId, ':', invoiceError?.message);
     }
 
     // Ultimate fallback: attach SVG directly (no Puppeteer required)

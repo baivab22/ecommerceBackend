@@ -15,7 +15,7 @@ const {
 } = require('../services/emailTemplate');
 const {
   buildInvoiceHtml,
-  generateInvoicePngBuffer,
+  generateInvoicePdfBuffer,
 } = require('../services/invoiceRenderer.service');
 
 // Initialize Google OAuth client
@@ -880,7 +880,7 @@ exports.sendInvoiceEmail = async (req, res) => {
       title: 'Invoice',
     });
 
-    const invoicePng = await generateInvoicePngBuffer({
+    const invoicePdf = await generateInvoicePdfBuffer({
       order,
       customerEmail,
       customerName,
@@ -889,11 +889,11 @@ exports.sendInvoiceEmail = async (req, res) => {
     });
 
     const attachments = [...getLogoAttachment()];
-    if (invoicePng) {
+    if (invoicePdf) {
       attachments.push({
-        filename: `invoice-${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}.png`,
-        content: invoicePng,
-        contentType: 'image/png',
+        filename: `invoice-${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}.pdf`,
+        content: invoicePdf,
+        contentType: 'application/pdf',
       });
     }
 
