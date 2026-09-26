@@ -11,9 +11,12 @@ const {
   sendOutOfStockReportEmail,
   checkOutOfStockProducts,
 } = require("../controllers/orderController");
+const {
+  handlePaymentScreenshotUpload,
+} = require("../handlers/multerPaymentScreenshot.handler");
 
 const router = express.Router();
-router.post("/order/new/:userId", createOrder);
+router.post("/order/new/:userId", handlePaymentScreenshotUpload, createOrder);
 router.get("/order", getOrderedProductList);
 router.get('/order/user/:userId', getOrdersByUser);
 router.get("/order/orderDetails/:productOrderId", getOrderDetails);

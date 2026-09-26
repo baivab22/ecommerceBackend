@@ -67,9 +67,22 @@ giftBoxCharge:Number,
   couponDiscount: { type: Number, default: 0 },
   phoneNumber: String,
   isHomeDelivery:Boolean,
-  shippingLocation:String,
+  shippingLocation: {
+    type: String,
+    required: true,
+    trim: true,
+  },
   paymentMethod:String,
 
+  paymentScreenshot: {
+    type: String,
+    default: null,
+  },
+  paymentScreenshotUploadedAt: {
+    type: Date,
+    default: null,
+  },
+  paymentChannel: String,
 
   orderNote:String,
 
