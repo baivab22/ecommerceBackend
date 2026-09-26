@@ -20,6 +20,49 @@ const formatDate = (date) => {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 };
 
+/**
+ * Resolves the date an order was placed on.
+ *
+ * `OrderedAt` is a String the client fills with `toLocaleString()`, so its
+ * format follows the *customer's* browser locale. V8 only parses the en-US
+ * shape ("9/26/2026, 10:41:23 AM"); day-first variants ("26/09/2026,
+ * 15:53:02") throw an Invalid Date and the invoice then printed "N/A".
+ * Roughly 9% of real orders were affected.
+ *
+ * Order of preference:
+ *   1. `date`       — a real BSON Date with `default: Date.now`, so it is both
+ *                     unambiguous and present on every order.
+ *   2. `OrderedAt`  — parsed leniently, honouring a day-first string when the
+ *                     native parser rejects it.
+ *   3. now         — last resort, never blank.
+ */
+const resolveOrderDate = (order) => {
+  if (order?.date) {
+    const fromDateField = order.date instanceof Date ? order.date : new Date(order.date);
+    if (!isNaN(fromDateField.getTime())) return fromDateField;
+  }
+
+  const raw = order?.OrderedAt;
+  if (raw) {
+    const direct = raw instanceof Date ? raw : new Date(raw);
+    if (!isNaN(direct.getTime())) return direct;
+
+    // Native parsing gave up — retry as an explicit DD/MM/YYYY, HH:mm:ss.
+    const text = String(raw).trim();
+    const match = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:[, ]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (match) {
+      const [, d, m, y, hh, mm, ss] = match;
+      const parsed = new Date(
+        Number(y), Number(m) - 1, Number(d),
+        Number(hh || 0), Number(mm || 0), Number(ss || 0)
+      );
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+  }
+
+  return new Date();
+};
+
 const getPaymentMethodLabel = (method) => {
   const labels = {
     esewa: 'eSewa', khalti: 'Khalti', cod: 'Cash on Delivery',
@@ -82,7 +125,7 @@ const formatAmountInWords = (amount, currency = 'NPR') => {
 
 const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, title = 'Order Confirmation', currency = 'NPR' }) => {
   const orderId = order?.productOrderId || String(order?._id || '').slice(-8).toUpperCase();
-  const orderDate = order?.OrderedAt ? new Date(order.OrderedAt) : new Date();
+  const orderDate = resolveOrderDate(order);
 
   const products = (order?.products || []).map((p) => {
     const qty = Number(p?.quantity || 1);
