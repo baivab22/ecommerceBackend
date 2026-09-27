@@ -61,8 +61,8 @@ const sendOutOfStockNotification = async (newOutOfStockProducts) => {
                       <h3 style="margin:0 0 6px;color:#991b1b;font-size:16px;">${product.name}</h3>
                       <p style="margin:2px 0;font-size:13px;"><strong>Previous Stock:</strong> ${product.previousStock} units</p>
                       <p style="margin:2px 0;font-size:13px;"><strong>Ordered Quantity:</strong> ${product.orderedQuantity} units</p>
-                      <p style="margin:2px 0;font-size:13px;"><strong>Price:</strong> NPR ${product.price || 'N/A'}</p>
-                      <p style="margin:2px 0;font-size:13px;"><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+                      <p style="margin:2px 0;font-size:13px;"><strong>Price:</strong> NPR ${product.discountedPrice || 'N/A'}</p>
+                      <p style="margin:2px 0;font-size:13px;"><strong> Prevously listed Time:</strong> ${new Date().toLocaleString()}</p>
                     </div>
                   `).join('')}
                 </div>
