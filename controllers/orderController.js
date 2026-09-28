@@ -17,6 +17,9 @@ const {
   sendNewOrderPlacedNotification,
   sendOrderConfirmationToCustomer,
 } = require("../services/emailServices");
+const {
+  notifySubscribersOfRestock,
+} = require("../services/restockNotification.service");
 
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
@@ -741,6 +744,34 @@ exports.checkOutOfStockProducts = async (req, res) => {
   }
 };
 
+// Every product currently out of stock, newest sales first.
+// Shared by the report endpoint and the bulk stock endpoint so both agree on
+// exactly which products are "out of stock" and in which order.
+const OUT_OF_STOCK_SORT = { totalSales: -1, lastSoldAt: -1 };
+
+const findOutOfStockProducts = () =>
+  Product.find({ stockQuantity: { $lte: 0 } })
+    .populate('category')
+    .populate('subCategory')
+    .sort(OUT_OF_STOCK_SORT);
+
+// The report filters in Node (category/sub-category live behind a populate),
+// so a single query is loaded and narrowed here. Regex-escaped because the
+// term comes straight from a query string.
+const filterOutOfStockBySearch = (products, search) => {
+  const term = search ? String(search).trim() : '';
+  if (!term) return products;
+
+  const escapedSearch = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escapedSearch, 'i');
+  return products.filter(
+    (product) =>
+      (product.name && regex.test(product.name)) ||
+      (product.category?.name && regex.test(product.category.name)) ||
+      (product.subCategory?.name && regex.test(product.subCategory.name))
+  );
+};
+
 // New endpoint to get complete out-of-stock report
 exports.getOutOfStockReport = async (req, res) => {
   try {
@@ -749,24 +780,12 @@ exports.getOutOfStockReport = async (req, res) => {
     const skip = (page - 1) * limit;
     const search = req.query.search ? String(req.query.search).trim() : '';
 
-    const allOutOfStockProducts = await Product.find({
-      stockQuantity: { $lte: 0 },
-    })
-      .populate('category')
-      .populate('subCategory')
-      .sort({ totalSales: -1, lastSoldAt: -1 });
+    const allOutOfStockProducts = await findOutOfStockProducts();
 
-    let filteredProducts = allOutOfStockProducts;
-    if (search) {
-      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(escapedSearch, 'i');
-      filteredProducts = allOutOfStockProducts.filter(
-        (product) =>
-          (product.name && regex.test(product.name)) ||
-          (product.category?.name && regex.test(product.category.name)) ||
-          (product.subCategory?.name && regex.test(product.subCategory.name))
-      );
-    }
+    const filteredProducts = filterOutOfStockBySearch(
+      allOutOfStockProducts,
+      search
+    );
 
     const total = filteredProducts.length;
     const paginatedProducts = filteredProducts.slice(skip, skip + limit);
@@ -785,6 +804,132 @@ exports.getOutOfStockReport = async (req, res) => {
       success: "Successfully retrieved out-of-stock report",
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Bulk-set the stock quantity of out-of-stock products in one shot.
+//
+// Two scopes:
+//   "selected" → exactly the productIds in the body
+//   "all"      → every currently out-of-stock product (optionally narrowed by
+//                the same `search` the table is filtered by)
+//
+// A product is only ever *moved into* a new stock count here, so a `stockQuantity`
+// of 0 is a valid no-op-ish request but anything else always means "back in stock".
+// Restocked products are queued for the same restock-notification fan-out the
+// single-product update path triggers, otherwise subscribers would wait forever.
+exports.bulkUpdateOutOfStock = async (req, res) => {
+  try {
+    const { productIds, stockQuantity, scope = 'selected', search } = req.body || {};
+    const targetScope = scope === 'all' ? 'all' : 'selected';
+
+    // Number(null) and Number('') are both 0, so an omitted/blank quantity
+    // would silently mean "zero out the inventory". Reject those up front.
+    if (
+      stockQuantity === null ||
+      stockQuantity === undefined ||
+      stockQuantity === '' ||
+      typeof stockQuantity === 'boolean'
+    ) {
+      return res.status(400).json({ error: "stockQuantity is required" });
+    }
+
+    const stock = Number(stockQuantity);
+    if (!Number.isInteger(stock) || stock < 0) {
+      return res.status(400).json({
+        error: "stockQuantity must be a whole number greater than or equal to 0",
+      });
+    }
+    if (stock > 1_000_000) {
+      return res.status(400).json({
+        error: "stockQuantity must be 1,000,000 or less",
+      });
+    }
+
+    let ids = [];
+
+    if (targetScope === 'all') {
+      const outOfStockProducts = filterOutOfStockBySearch(
+        await findOutOfStockProducts(),
+        search
+      );
+      ids = outOfStockProducts.map((product) => product._id);
+    } else {
+      if (!Array.isArray(productIds) || productIds.length === 0) {
+        return res.status(400).json({ error: "Product IDs array is required" });
+      }
+
+      // Drop anything that is not a well-formed ObjectId so one bad value can
+      // never take the whole request down with a CastError. Dedup on the raw
+      // string first — a Set of ObjectId wrappers would never collapse, since
+      // each constructor call yields a distinct reference.
+      ids = [
+        ...new Set(
+          productIds
+            .map((id) => String(id))
+            .filter((id) => mongoose.isValidObjectId(id))
+        ),
+      ].map((id) => new mongoose.Types.ObjectId(id));
+
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "No valid product IDs provided" });
+      }
+    }
+
+    if (ids.length === 0) {
+      return res.status(200).json({
+        success: true,
+        matchedCount: 0,
+        modifiedCount: 0,
+        stockQuantity: stock,
+        restocked: 0,
+        message: "No out-of-stock products matched. Nothing was updated.",
+      });
+    }
+
+    // outOfStockNotificationSent is a per-stockout-cycle flag. Leaving it true
+    // after a restock means the *next* stockout would never alert anyone, so
+    // reset it for every product that is back in stock.
+    const update = { $set: { stockQuantity: stock } };
+    if (stock > 0) {
+      update.$set.outOfStockNotificationSent = false;
+    }
+
+    const result = await Product.updateMany({ _id: { $in: ids } }, update);
+
+    let restocked = 0;
+    if (stock > 0 && result.modifiedCount > 0) {
+      restocked = result.modifiedCount;
+      // Non-blocking: the response must not wait on SMTP. Guarded so a failure
+      // here can never become an unhandled rejection that takes the process down.
+      runAfterResponse(() =>
+        Promise.all(
+          ids.map((id) => notifySubscribersOfRestock(id))
+        ).then((results) => {
+          const notified = results.reduce(
+            (sum, entry) => sum + (entry?.notified || 0),
+            0
+          );
+          if (notified > 0) {
+            console.log(
+              `[Restock][bulk] ${notified} subscriber(s) notified across ${ids.length} product(s).`
+            );
+          }
+        })
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      stockQuantity: stock,
+      restocked,
+      message: `Successfully updated stock to ${stock} for ${result.modifiedCount} product(s)`,
+    });
+  } catch (error) {
+    console.error("Error bulk updating out-of-stock products:", error);
     res.status(500).json({ error: error.message });
   }
 };
