@@ -40,7 +40,7 @@ const {
     ],
   };
 
-  const params = { order, customerEmail: 'bidaribaivab7@gmail.com', customerName: 'Baivab Bidari', title: 'Order Confirmation' };
+  const params = { order, customerEmail: 'abhushangallery2023@gmail.com', customerName: 'Baivab Bidari', title: 'Order Confirmation' };
   const data = extractInvoiceData(params);
   const OUT_DIR = path.join(__dirname, 'output');
 

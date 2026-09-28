@@ -35,7 +35,7 @@ const referenceInvoiceData = {
     address:
       'kkkkkkk, Kalanki, Kuleshwar, Kathmandu-14, Kathmandu Metropolitan City, Kathmandu, Bagamati Province, 44614, Nepal',
     phone: '4343434343',
-    email: 'bidaribaivab7@gmail.com',
+    email: 'abhushangallery2023@gmail.com',
   },
 
   items: [
