@@ -11,6 +11,7 @@ const {
   sendOutOfStockReportEmail,
   checkOutOfStockProducts,
   bulkUpdateOutOfStock,
+  increaseStockForAllProducts,
 } = require("../controllers/orderController");
 const {
   handlePaymentScreenshotUpload,
@@ -26,6 +27,7 @@ router.get("/order/out-of-stock", getOutOfStockReport);
 router.post("/order/out-of-stock/check", checkOutOfStockProducts);
 router.post("/order/out-of-stock/email", sendOutOfStockReportEmail);
 router.patch("/order/out-of-stock/bulk-stock", bulkUpdateOutOfStock);
+router.post("/order/increase-stock-all", increaseStockForAllProducts);
 
 router.post("/order/new/:userId", handlePaymentScreenshotUpload, createOrder);
 router.get("/order", getOrderedProductList);

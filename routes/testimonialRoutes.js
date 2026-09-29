@@ -19,19 +19,23 @@ const maxVideoSize = 50 * 1024 * 1024;
 
 fs.mkdirSync(uploadDirectory, { recursive: true });
 
+// Client side cropping re-encodes the picture on a canvas, so browsers may hand
+// us a couple of extra (but still safe) image mime types.
 const isImage = (mimetype = "") =>
-  /^image\/(png|jpe?g|gif|webp|jfif|pjpeg|x-png)$/i.test(mimetype);
+  /^image\/(png|apng|jpe?g|gif|webp|jfif|pjpeg|x-png)$/i.test(mimetype);
 const isVideo = (mimetype = "") =>
   /^video\/(mp4|webm|ogg|quicktime|x-msvideo)$/i.test(mimetype);
 
 const extensionByMimeType = {
   "image/png": ".png",
+  "image/apng": ".png",
+  "image/x-png": ".png",
   "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
   "image/pjpeg": ".jpg",
+  "image/jfif": ".jpg",
   "image/gif": ".gif",
   "image/webp": ".webp",
-  "image/jfif": ".jpg",
-  "image/x-png": ".png",
   "video/mp4": ".mp4",
   "video/webm": ".webm",
   "video/ogg": ".ogv",

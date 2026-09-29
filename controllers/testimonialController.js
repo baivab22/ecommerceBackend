@@ -1,5 +1,6 @@
 const fs = require("fs/promises");
 const path = require("path");
+const sharp = require("sharp");
 const Testimonial = require("../modals/testimonial.modal");
 
 const uploadDirectory = path.join(__dirname, "..", "uploads", "testimonial");
@@ -75,6 +76,31 @@ const validateUploadedMedia = (imageFiles, videoFiles, requestedMediaType) => {
   return uploadedMediaType;
 };
 
+const isReadableImage = async (file) => {
+  if (!file?.path) return false;
+  try {
+    const metadata = await sharp(file.path).metadata();
+    return Boolean(metadata?.width && metadata?.height);
+  } catch (error) {
+    return false;
+  }
+};
+
+// The dashboard crops photos in the browser and re-encodes them on a canvas, so
+// the bytes on disk are produced by the client. Confirm they really are images.
+const assertUploadedImagesAreReadable = async (imageFiles) => {
+  if (imageFiles.length === 0) return;
+
+  const readable = await Promise.all(imageFiles.map(isReadableImage));
+  if (readable.some((result) => !result)) {
+    const error = new Error(
+      "Uploaded testimonial photos must be valid image files."
+    );
+    error.status = 400;
+    throw error;
+  }
+};
+
 const removeStoredMedia = async (fileNames, excludedTestimonialId) => {
   const names = [...new Set((fileNames || []).filter(Boolean))];
 
@@ -112,6 +138,8 @@ exports.createTestimonial = async (req, res) => {
       videoFiles,
       requestedMediaType
     );
+
+    await assertUploadedImagesAreReadable(imageFiles);
 
     if (!mediaType) {
       return res.status(400).json({
@@ -163,6 +191,9 @@ exports.updatedTestimonial = async (req, res) => {
       videoFiles,
       requestedMediaType
     );
+
+    await assertUploadedImagesAreReadable(imageFiles);
+
     const updateFields = {};
 
     if (req.body.testimonialDescription !== undefined) {

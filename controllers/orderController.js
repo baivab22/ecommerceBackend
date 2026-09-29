@@ -934,6 +934,93 @@ exports.bulkUpdateOutOfStock = async (req, res) => {
   }
 };
 
+// Add the same amount of stock to EVERY product in the catalog, in one shot.
+//
+// This is deliberately an increment ($inc) and not a set: the dashboard field
+// asks "add N items to each product", so a product sitting at 3 becomes 3+N and
+// a product at 0 becomes N. Use the bulk-stock endpoint above when the target is
+// an exact quantity instead.
+//
+// Only products that were actually at zero are emailed, since those are the
+// ones a waiting subscriber cares about — a product going from 12 to 12+N has
+// never been out of stock and needs no notification.
+exports.increaseStockForAllProducts = async (req, res) => {
+  try {
+    const { quantity } = req.body || {};
+
+    // Number(null)/Number('') are both 0, so an omitted value would otherwise
+    // look like "add nothing" and silently report success. Reject it instead.
+    if (
+      quantity === null ||
+      quantity === undefined ||
+      quantity === '' ||
+      typeof quantity === 'boolean'
+    ) {
+      return res.status(400).json({ error: "quantity is required" });
+    }
+
+    const amount = Number(quantity);
+    if (!Number.isInteger(amount) || amount < 1) {
+      return res.status(400).json({
+        error: "quantity must be a whole number of at least 1",
+      });
+    }
+    if (amount > 1_000_000) {
+      return res.status(400).json({ error: "quantity must be 1,000,000 or less" });
+    }
+
+    // Captured before the increment: these are exactly the products that cross
+    // from 0 into stock because of this change.
+    const wasOutOfStock = await Product.find(
+      { stockQuantity: { $lte: 0 } },
+      { _id: 1 }
+    ).lean();
+    const restockedIds = wasOutOfStock.map((product) => product._id);
+
+    // outOfStockNotificationSent is a per-stockout-cycle flag. Resetting it keeps
+    // the next stockout able to alert people, exactly like the bulk-set path.
+    const result = await Product.updateMany(
+      {},
+      {
+        $inc: { stockQuantity: amount },
+        $set: { outOfStockNotificationSent: false },
+      }
+    );
+
+    if (restockedIds.length > 0) {
+      // Non-blocking: the response must not wait on SMTP. runAfterResponse
+      // swallows failures so a bad address can never take the process down.
+      runAfterResponse(() =>
+        Promise.all(
+          restockedIds.map((id) => notifySubscribersOfRestock(id))
+        ).then((entries) => {
+          const notified = entries.reduce(
+            (sum, entry) => sum + (entry?.notified || 0),
+            0
+          );
+          if (notified > 0) {
+            console.log(
+              `[Restock][all] ${notified} subscriber(s) notified across ${restockedIds.length} product(s).`
+            );
+          }
+        })
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      quantity: amount,
+      restocked: restockedIds.length,
+      message: `Added ${amount} to the stock of ${result.modifiedCount} product(s)`,
+    });
+  } catch (error) {
+    console.error("Error increasing stock for all products:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // New endpoint to send complete out-of-stock report via email
 exports.sendOutOfStockReportEmail = async (req, res) => {
   try {
