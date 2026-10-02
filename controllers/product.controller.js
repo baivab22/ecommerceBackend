@@ -1,4 +1,10 @@
 const { Product, ProductImage } = require("../modals/product.modal");
+const {
+  Category,
+  SubCategory,
+  SubCategoryNested,
+} = require("../modals/category.modal");
+const mongoose = require("mongoose");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -1868,6 +1874,302 @@ exports.bulkUpdateHotSelling = async (req, res, next) => {
     });
   } catch (error) {
     console.error("Error bulk updating hot selling status:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Ceiling for a single bulk category write. The `all` scope rewrites every
+// matching product in one updateMany, so an unbounded catalog-wide request is
+// almost always a mis-click rather than an intent worth honouring.
+const MAX_BULK_CATEGORY_PRODUCTS = 10000;
+
+// Collapse a client-supplied id into `undefined` when it was omitted, null or
+// blank. Without this, `subCategoryId: ""` would read as "provided" and take
+// the back-fill/cross-check branches below.
+const normalizeBulkParam = (value) => {
+  if (value === undefined || value === null) return undefined;
+  const trimmed = String(value).trim();
+  return trimmed === "" ? undefined : trimmed;
+};
+
+// Find the SubCategory that owns a nested sub-category, so a caller that only
+// picked the deepest level still gets a coherent parent chain written.
+const findOwningSubCategory = async (nestedSubCategoryId) =>
+  SubCategory.findOne({ subCategories: nestedSubCategoryId }).select("_id");
+
+// Same idea one level up: which Category owns this SubCategory?
+const findOwningCategory = async (subCategoryId) =>
+  Category.findOne({ subCategories: subCategoryId }).select("_id");
+
+// Turn the (optional) category / subCategory / nestedSubCategory triple into a
+// single coherent set of writes.
+//
+// Two rules make the result safe to apply with one updateMany:
+//   1. Missing parents are back-filled from the database, so picking only a
+//      nested sub-category still writes the sub-category and category it
+//      actually belongs to.
+//   2. A level that is *not* picked and cannot be derived is cleared. Leaving a
+//      stale sub-category behind after a category change would point the product
+//      at a sub-category of a different category, which no filter in
+//      getAllProduct could ever find again.
+const resolveCategoryTarget = async ({
+  categoryId,
+  subCategoryId,
+  nestedSubCategoryId,
+}) => {
+  let nextCategoryId = normalizeBulkParam(categoryId);
+  let nextSubCategoryId = normalizeBulkParam(subCategoryId);
+  let nextNestedSubCategoryId = normalizeBulkParam(nestedSubCategoryId);
+
+  if (
+    !nextCategoryId &&
+    !nextSubCategoryId &&
+    !nextNestedSubCategoryId
+  ) {
+    return {
+      error: "At least one of categoryId, subCategoryId or nestedSubCategoryId is required",
+    };
+  }
+
+  // --- existence checks, deepest level first so we can reuse the lookup ---
+  let nestedDoc = null;
+  if (nextNestedSubCategoryId) {
+    if (!mongoose.isValidObjectId(nextNestedSubCategoryId)) {
+      return { error: "nestedSubCategoryId is not a valid id" };
+    }
+    nestedDoc = await SubCategoryNested.findById(nextNestedSubCategoryId).select("_id");
+    if (!nestedDoc) {
+      return { error: "No nested sub-category found with the given nestedSubCategoryId" };
+    }
+  }
+
+  let subCategoryDoc = null;
+  if (nextSubCategoryId) {
+    if (!mongoose.isValidObjectId(nextSubCategoryId)) {
+      return { error: "subCategoryId is not a valid id" };
+    }
+    subCategoryDoc = await SubCategory.findById(nextSubCategoryId).select("_id subCategories");
+    if (!subCategoryDoc) {
+      return { error: "No sub-category found with the given subCategoryId" };
+    }
+  } else if (nestedDoc) {
+    const owner = await findOwningSubCategory(nestedDoc._id);
+    if (!owner) {
+      return {
+        error: "The selected nested sub-category is not linked to any sub-category",
+      };
+    }
+    nextSubCategoryId = String(owner._id);
+    subCategoryDoc = await SubCategory.findById(owner._id).select("_id subCategories");
+  }
+
+  let categoryDoc = null;
+  if (nextCategoryId) {
+    if (!mongoose.isValidObjectId(nextCategoryId)) {
+      return { error: "categoryId is not a valid id" };
+    }
+    categoryDoc = await Category.findById(nextCategoryId).select("_id subCategories");
+    if (!categoryDoc) {
+      return { error: "No category found with the given categoryId" };
+    }
+  } else if (subCategoryDoc) {
+    const owner = await findOwningCategory(subCategoryDoc._id);
+    if (!owner) {
+      return {
+        error: "The selected sub-category is not linked to any category",
+      };
+    }
+    nextCategoryId = String(owner._id);
+    categoryDoc = await Category.findById(owner._id).select("_id subCategories");
+  }
+
+  // --- cross-level consistency, only when the caller pinned both ends ---
+  if (categoryDoc && subCategoryDoc) {
+    const owned = categoryDoc.subCategories.some(
+      (id) => String(id) === String(subCategoryDoc._id)
+    );
+    if (!owned) {
+      return {
+        error: "The selected sub-category does not belong to the selected category",
+      };
+    }
+  }
+
+  if (subCategoryDoc && nestedDoc) {
+    const owned = (subCategoryDoc.subCategories || []).some(
+      (id) => String(id) === String(nestedDoc._id)
+    );
+    if (!owned) {
+      return {
+        error: "The selected nested sub-category does not belong to the selected sub-category",
+      };
+    }
+  }
+
+  // --- build the write ---
+  // categoryDoc is always resolved by now: every accepted path either pinned a
+  // category, or supplied a deeper level whose parent chain got back-filled.
+  // subCategoryDoc is legitimately null for a category-only change, which is
+  // exactly the case that has to clear it.
+  const set = {
+    category: categoryDoc?._id || null,
+    subCategory: subCategoryDoc?._id || null,
+    // A sub-category change invalidates the old nested sub-category unless a
+    // new one was picked.
+    nestedSubCategory: nextNestedSubCategoryId ? nestedDoc?._id || null : null,
+  };
+
+  const cleared = nextNestedSubCategoryId
+    ? []
+    : subCategoryDoc
+    ? ["nestedSubCategory"]
+    : ["subCategory", "nestedSubCategory"];
+
+  return {
+    set,
+    cleared,
+    // Normalised to null so the response always carries all three keys — an
+    // `undefined` would be dropped by JSON.stringify and the client would have
+    // to guess whether a missing key means "cleared" or "unchanged".
+    categoryId: nextCategoryId || null,
+    subCategoryId: nextSubCategoryId || null,
+    nestedSubCategoryId: nextNestedSubCategoryId || null,
+  };
+};
+
+// Rebuild the product filter used by the admin list for the `all` scope, so
+// "apply to everything matching" hits exactly the rows the table is showing.
+const buildBulkCategoryFilter = (filters = {}) => {
+  const query = {};
+
+  const search = normalizeBulkParam(filters.search);
+  if (search) {
+    const cleaned = search.replace(/\s+/g, " ");
+    const regex = new RegExp(cleaned.split(" ").join(".*"), "i");
+    query.$or = [{ name: { $regex: regex } }, { description: { $regex: regex } }];
+  }
+
+  // Same hierarchical priority as getAllProduct: the most specific filter wins.
+  const categoryId = normalizeBulkParam(filters.categoryId);
+  const subCategoryId = normalizeBulkParam(filters.subCategoryId);
+  const nestedSubCategoryId = normalizeBulkParam(filters.nestedSubCategoryId);
+
+  if (nestedSubCategoryId) {
+    query.nestedSubCategory = nestedSubCategoryId;
+  } else if (subCategoryId) {
+    query.subCategory = subCategoryId;
+  } else if (categoryId) {
+    query.category = categoryId;
+  }
+
+  return query;
+};
+
+// Bulk reassign the category hierarchy of many products in one request.
+//
+// Body:
+//   productIds[]         — required when scope is "selected"
+//   scope                — "selected" (default) or "all"
+//   filters              — the list's own filters, used when scope is "all"
+//   categoryId           — optional
+//   subCategoryId        — optional
+//   nestedSubCategoryId  — optional
+//
+// At least one of the three ids is required. See resolveCategoryTarget for how
+// partial selections are completed and why unpicked deeper levels are cleared.
+exports.bulkUpdateProductCategory = async (req, res) => {
+  try {
+    const {
+      productIds,
+      scope = "selected",
+      filters,
+      categoryId,
+      subCategoryId,
+      nestedSubCategoryId,
+    } = req.body || {};
+
+    const targetScope = scope === "all" ? "all" : "selected";
+
+    const target = await resolveCategoryTarget({
+      categoryId,
+      subCategoryId,
+      nestedSubCategoryId,
+    });
+    if (target.error) {
+      return res.status(400).json({ error: target.error });
+    }
+
+    let query;
+
+    if (targetScope === "all") {
+      query = buildBulkCategoryFilter(filters);
+
+      // Refuse an oversized batch instead of rewriting the whole catalog by
+      // accident — the admin has to narrow the filter and try again.
+      const matching = await Product.countDocuments(query);
+      if (matching === 0) {
+        return res.status(200).json({
+          success: true,
+          matchedCount: 0,
+          modifiedCount: 0,
+          categoryId: target.categoryId,
+          subCategoryId: target.subCategoryId,
+          nestedSubCategoryId: target.nestedSubCategoryId,
+          clearedFields: target.cleared,
+          message: "No products matched. Nothing was updated.",
+        });
+      }
+      if (matching > MAX_BULK_CATEGORY_PRODUCTS) {
+        return res.status(400).json({
+          error: `That selection matches ${matching} products. Narrow the filter to ${MAX_BULK_CATEGORY_PRODUCTS} or fewer.`,
+        });
+      }
+    } else {
+      if (!Array.isArray(productIds) || productIds.length === 0) {
+        return res.status(400).json({ error: "Product IDs array is required" });
+      }
+
+      // Drop anything that is not a well-formed ObjectId so one bad value can
+      // never take the whole request down with a CastError. Dedup on the raw
+      // string first — a Set of ObjectId wrappers would never collapse, since
+      // each constructor call yields a distinct reference.
+      const ids = [
+        ...new Set(
+          productIds
+            .map((id) => String(id))
+            .filter((id) => mongoose.isValidObjectId(id))
+        ),
+      ].map((id) => new mongoose.Types.ObjectId(id));
+
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "No valid product IDs provided" });
+      }
+      if (ids.length > MAX_BULK_CATEGORY_PRODUCTS) {
+        return res.status(400).json({
+          error: `Too many products selected. The limit is ${MAX_BULK_CATEGORY_PRODUCTS} at a time.`,
+        });
+      }
+
+      query = { _id: { $in: ids } };
+    }
+
+    const result = await Product.updateMany(query, { $set: target.set });
+
+    res.status(200).json({
+      success: true,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      categoryId: target.categoryId,
+      subCategoryId: target.subCategoryId,
+      nestedSubCategoryId: target.nestedSubCategoryId,
+      clearedFields: target.cleared,
+      message:
+        result.modifiedCount > 0
+          ? `Successfully updated the category for ${result.modifiedCount} product(s)`
+          : "The selected products already had that category",
+    });
+  } catch (error) {
+    console.error("Error bulk updating product category:", error);
     res.status(500).json({ error: error.message });
   }
 };

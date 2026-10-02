@@ -161,6 +161,7 @@ const {
   addToHotSelling,
   removeFromHotSelling,
   bulkUpdateHotSelling,
+  bulkUpdateProductCategory,
 } = require("../controllers/product.controller");
 
 // =====================================
@@ -170,6 +171,10 @@ const {
 // Product CRUD
 router.route("/product").get(getAllProduct);
 router.route("/product/new").post(cpUploadProductVideo, optimizeUploadedImages, createProduct);
+// Declared before "/product/:productId" on purpose: Express matches in
+// declaration order, so a param route registered first would swallow the
+// literal "bulk-category" segment and try to look up a product by that name.
+router.patch("/product/bulk-category", bulkUpdateProductCategory);
 router.patch("/product/:productId", cpUploadProductVideo, optimizeUploadedImages, updateProduct);
 router.delete("/product/:productId", deleteProduct);
 router.get("/product/:productId", getProductDetailsById);
