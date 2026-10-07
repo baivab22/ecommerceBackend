@@ -12,6 +12,11 @@ const OrderProductSchema = new mongoose.Schema({
   fullName: { type: String, required: false },
   isGuestCheckout: { type: Boolean, default: false },
 
+  // Customer name entered in the cart checkout form ("Shipping Details").
+  // Captured for every order — logged in or guest — and surfaced in the admin
+  // dashboard, the printed invoice and the confirmation emails.
+  name: { type: String, required: false, trim: true },
+
   products: [
     {
       productId: {

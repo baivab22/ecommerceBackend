@@ -24,7 +24,7 @@ const referenceInvoiceData = {
   title: 'Order Confirmation',
 
   seller: {
-    name: 'Aabhushan Gallery',
+    name: 'Abhushan Gallery',
     address: 'Kalimati, Kathmandu, Nepal',
     phone: '+977 9861698400',
     email: 'baivabidari876@gmail.com',

@@ -9,24 +9,63 @@ const { buildEmailShell, getLogoAttachment } = require('./emailTemplate');
 const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePdfBuffer,
-  buildInvoiceSvg,
+  generateInvoicePngBuffer,
 } = require('./invoiceRenderer.service');
 
 const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
 
+/**
+ * Build the invoice attachment for an order email.
+ *
+ * PDF is the intended format. If Chromium is unavailable, the same invoice is
+ * rasterised to PNG rather than attaching SVG: several mail clients will not
+ * render an SVG attachment at all, so the customer received an unopenable file.
+ * Never falls back to a format the customer cannot view — returns null and lets
+ * the caller send the email without an attachment instead.
+ */
+const buildInvoiceAttachment = async ({ order, customerEmail, customerName, senderEmail, title }) => {
+  const orderId = order.productOrderId || order._id.toString().slice(-8).toUpperCase();
+  const rendererParams = { order, customerEmail, customerName, senderEmail, title };
+
+  try {
+    const pdf = await generateInvoicePdfBuffer(rendererParams);
+    if (pdf) {
+      const buffer = Buffer.from(pdf);
+      console.log(`[invoice] PDF generated: ${buffer.length} bytes`);
+      return { filename: `invoice-${orderId}.pdf`, content: buffer, contentType: 'application/pdf' };
+    }
+  } catch (error) {
+    console.error(`[invoice] PDF generation failed for ${orderId}:`, error?.message);
+  }
+
+  try {
+    const png = await generateInvoicePngBuffer(rendererParams);
+    if (png) {
+      const buffer = Buffer.from(png);
+      console.log(`[invoice] PNG fallback generated: ${buffer.length} bytes`);
+      return { filename: `invoice-${orderId}.png`, content: buffer, contentType: 'image/png' };
+    }
+  } catch (error) {
+    console.error(`[invoice] PNG generation failed for ${orderId}:`, error?.message);
+  }
+
+  console.error(`[invoice] Could not render an invoice attachment for ${orderId}; sending without one.`);
+  return null;
+};
+
 const buildFooterHtml = () => `
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;text-align:center;line-height:1.6;">
-    <p style="margin:0;">Aabhushan Gallery | Kalimati, Kathmandu, Nepal</p>
+    <p style="margin:0;">Abhushan Gallery | Kalimati, Kathmandu, Nepal</p>
     <p style="margin:4px 0 0;">Phone: 9861698400 | Email: ${EMAIL_CONFIG.sender}</p>
-    <p style="margin:8px 0 0;">&copy; ${new Date().getFullYear()} Aabhushan Gallery. All rights reserved.</p>
+    <p style="margin:8px 0 0;">&copy; ${new Date().getFullYear()} Abhushan Gallery. All rights reserved.</p>
   </div>
 `;
 
 const buildFooterText = () => `
 ---
-Aabhushan Gallery | Kalimati, Kathmandu, Nepal
+Abhushan Gallery | Kalimati, Kathmandu, Nepal
 Phone: 9861698400 | Email: ${EMAIL_CONFIG.sender}
-(c) ${new Date().getFullYear()} Aabhushan Gallery. All rights reserved.
+(c) ${new Date().getFullYear()} Abhushan Gallery. All rights reserved.
 `;
 
 const sendOutOfStockNotification = async (newOutOfStockProducts) => {
@@ -127,7 +166,7 @@ ${buildFooterText()}`;
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
 
     await transporter.sendMail({
-      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+      from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: EMAIL_CONFIG.adminRecipients,
       subject,
       html,
@@ -218,7 +257,7 @@ ${buildFooterText()}`;
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: EMAIL_CONFIG.adminRecipients, subject });
 
     await transporter.sendMail({
-      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+      from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: EMAIL_CONFIG.adminRecipients,
       subject,
       html,
@@ -255,7 +294,9 @@ const sendNewOrderPlacedNotification = async (order) => {
     const shippingPrice = Number(order?.shippingPrice || 0);
     const giftBoxCharge = Number(order?.giftBoxCharge || 0);
 
-    const userName = order?.userId?.name || "N/A";
+    // order.name is what the customer typed in the checkout form. The account
+    // name and the legacy guest fullName only fill in for older orders.
+    const userName = order?.name || order?.userId?.name || order?.fullName || "N/A";
     const userEmail = order?.userId?.email || "N/A";
     const userPhone = order?.userId?.phone || phoneNumber || "N/A";
     const userId = typeof order?.userId === "object" ? order?.userId?._id : order?.userId;
@@ -320,7 +361,7 @@ const sendNewOrderPlacedNotification = async (order) => {
               <!-- Customer Info -->
               <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:20px;">
                 <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Customer Information</h3>
-                <p style="margin:4px 0;font-size:14px;"><strong>Name:</strong> ${userName}</p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Name:</strong> ${escapeHtml(userName)}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Email:</strong> ${userEmail}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Phone:</strong> ${userPhone}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>User ID:</strong> <span style="font-family:monospace;font-size:12px;color:#6b7280;">${userId || 'N/A'}</span></p>
@@ -423,7 +464,7 @@ ${buildFooterText()}`;
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: adminRecipient, subject });
 
     const info = await transporter.sendMail({
-      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+      from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: adminRecipient,
       subject,
       html,
@@ -449,7 +490,9 @@ const sendOrderConfirmationToCustomer = async (order) => {
       return false;
     }
 
-    const customerName = order?.userId?.name || order?.fullName || 'Valued Customer';
+    // order.name is captured at checkout and wins over the account name so the
+    // greeting matches the name the customer actually typed for this order.
+    const customerName = order?.name || order?.userId?.name || order?.fullName || 'Valued Customer';
     const orderId = order?.productOrderId || order?._id || 'N/A';
 
     const totalAmount = Number(order?.totalAmount || 0);
@@ -485,68 +528,24 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
     const subject = `Order Confirmed - ${orderId}`;
 
-    // Generate A4 PDF invoice attachment; fall back to vector SVG (no Puppeteer)
-    let finalInvoiceBuffer = null;
-    let finalInvoiceFilename = `invoice-${orderId}.pdf`;
-    let finalInvoiceContentType = 'application/pdf';
-
-    try {
-      const invoicePdf = await generateInvoicePdfBuffer({
-        order,
-        customerEmail,
-        customerName,
-        senderEmail: EMAIL_CONFIG.sender,
-        title: 'Order Confirmation',
-      });
-
-      if (invoicePdf) {
-        finalInvoiceBuffer = Buffer.from(invoicePdf);
-        console.log('[email] Order confirmation PDF generated:', finalInvoiceBuffer.length, 'bytes');
-      } else {
-        console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
-      }
-    } catch (invoiceError) {
-      console.error('[email] PDF generation error for order', orderId, ':', invoiceError?.message);
-    }
-
-    // Ultimate fallback: attach SVG directly (no Puppeteer required)
-    if (!finalInvoiceBuffer) {
-      try {
-        const svgString = buildInvoiceSvg({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Confirmation',
-        });
-        finalInvoiceBuffer = Buffer.from(svgString, 'utf8');
-        finalInvoiceFilename = `invoice-${orderId}.svg`;
-        finalInvoiceContentType = 'image/svg+xml';
-        console.log('[email] SVG-only fallback attached:', finalInvoiceBuffer.length, 'bytes');
-      } catch (svgError) {
-        console.error('[email] SVG generation also failed for order', orderId, ':', svgError?.message);
-      }
-    }
-
-    if (!finalInvoiceBuffer) {
-      console.error('[email] All invoice generation methods failed for order:', orderId);
-    }
+    // A4 PDF invoice; falls back to PNG (never SVG) when Chromium is missing.
+    const invoiceAttachment = await buildInvoiceAttachment({
+      order,
+      customerEmail,
+      customerName,
+      senderEmail: EMAIL_CONFIG.sender,
+      title: 'Order Confirmation',
+    });
 
     // Include attachment note only when the invoice was actually generated
-    const invoiceNoteHtml = finalInvoiceBuffer
+    const invoiceNoteHtml = invoiceAttachment
       ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
       : '';
-    const invoiceNoteText = finalInvoiceBuffer
+    const invoiceNoteText = invoiceAttachment
       ? 'We have attached your order invoice to this email for your records.\n'
       : '';
 
-    const attachment = finalInvoiceBuffer
-      ? [{
-          filename: finalInvoiceFilename,
-          content: finalInvoiceBuffer,
-          contentType: finalInvoiceContentType,
-        }]
-      : [];
+    const attachment = invoiceAttachment ? [invoiceAttachment] : [];
 
     const html = `
       <!DOCTYPE html>
@@ -560,7 +559,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
               <p style="margin:8px 0 0;font-size:14px;color:#9ca3af;">Your order has been confirmed and is being prepared</p>
             </div>
             <div style="padding:24px 22px;">
-              <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${customerName},</p>
+              <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${escapeHtml(customerName)},</p>
               <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">
                 Your order has been confirmed by our team and is now being prepared for delivery.
               </p>
@@ -569,6 +568,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
               <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
                 <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Order Details</h3>
                 <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#2563eb;font-weight:700;">${orderId}</span></p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Name:</strong> ${escapeHtml(customerName)}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Shipping Address:</strong> ${shippingLocation}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> <span style="color:#166534;font-weight:700;font-size:16px;">${formatCurrency(totalAmount)}</span></p>
@@ -623,7 +623,7 @@ const sendOrderConfirmationToCustomer = async (order) => {
               <p style="font-size:14px;line-height:1.6;margin:16px 0;">
                 If you need any help, please contact us at ${EMAIL_CONFIG.sender}.
               </p>
-              <p style="font-size:14px;line-height:1.6;margin:18px 0 0;">Thank you for shopping with Aabhushan Gallery.</p>
+              <p style="font-size:14px;line-height:1.6;margin:18px 0 0;">Thank you for shopping with Abhushan Gallery.</p>
             </div>
             ${buildFooterHtml()}
           </div>
@@ -640,6 +640,7 @@ Your order has been confirmed by our team and is now being prepared for delivery
 
 ORDER DETAILS
 Order ID: ${orderId}
+Name: ${customerName}
 Payment: ${paymentMethod}
 Shipping Address: ${shippingLocation}
 Grand Total: ${formatCurrency(totalAmount)}
@@ -659,13 +660,13 @@ ${giftBoxCharge > 0 ? `Gift Box: ${formatCurrency(giftBoxCharge)}\n` : ''}Grand 
 
 ${invoiceNoteText}If you need help, contact us at ${EMAIL_CONFIG.sender}.
 
-Thank you for shopping with Aabhushan Gallery.
+Thank you for shopping with Abhushan Gallery.
 ${buildFooterText()}`;
 
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: customerEmail, subject });
 
     await transporter.sendMail({
-      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+      from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: customerEmail,
       subject,
       html,
@@ -677,7 +678,7 @@ ${buildFooterText()}`;
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId, finalInvoiceBuffer ? `(with invoice: ${finalInvoiceFilename})` : '(without invoice)');
+    console.log('Order confirmation email sent to customer:', customerEmail, 'for order:', orderId, invoiceAttachment ? `(with invoice: ${invoiceAttachment.filename})` : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order confirmation email:', error?.message || error);
@@ -693,7 +694,9 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
       return false;
     }
 
-    const customerName = order?.userId?.name || order?.fullName || 'Valued Customer';
+    // order.name is captured at checkout and wins over the account name so the
+    // greeting matches the name the customer actually typed for this order.
+    const customerName = order?.name || order?.userId?.name || order?.fullName || 'Valued Customer';
     const orderId = order?.productOrderId || order?._id || 'N/A';
     const totalAmount = Number(order?.totalAmount || 0);
     const shippingLocation = order?.shippingLocation || order?.locationAddress || 'N/A';
@@ -723,68 +726,24 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
 
     const subject = `Order Received - ${orderId}`;
 
-    // Generate A4 PDF invoice attachment; fall back to vector SVG (no Puppeteer)
-    let finalInvoiceBuffer = null;
-    let finalInvoiceFilename = `invoice-${orderId}.pdf`;
-    let finalInvoiceContentType = 'application/pdf';
-
-    try {
-      const invoicePdf = await generateInvoicePdfBuffer({
-        order,
-        customerEmail,
-        customerName,
-        senderEmail: EMAIL_CONFIG.sender,
-        title: 'Order Invoice',
-      });
-
-      if (invoicePdf) {
-        finalInvoiceBuffer = Buffer.from(invoicePdf);
-        console.log('[email] Order placed confirmation PDF generated:', finalInvoiceBuffer.length, 'bytes');
-      } else {
-        console.log('[email] Headless browser unavailable — will attach vector SVG invoice.');
-      }
-    } catch (invoiceError) {
-      console.error('[email] PDF generation error for order placed confirmation:', orderId, ':', invoiceError?.message);
-    }
-
-    // Ultimate fallback: attach SVG directly (no Puppeteer required)
-    if (!finalInvoiceBuffer) {
-      try {
-        const svgString = buildInvoiceSvg({
-          order,
-          customerEmail,
-          customerName,
-          senderEmail: EMAIL_CONFIG.sender,
-          title: 'Order Invoice',
-        });
-        finalInvoiceBuffer = Buffer.from(svgString, 'utf8');
-        finalInvoiceFilename = `invoice-${orderId}.svg`;
-        finalInvoiceContentType = 'image/svg+xml';
-        console.log('[email] SVG-only fallback attached for placed confirmation:', finalInvoiceBuffer.length, 'bytes');
-      } catch (svgError) {
-        console.error('[email] SVG generation also failed for order placed confirmation:', orderId, ':', svgError?.message);
-      }
-    }
-
-    if (!finalInvoiceBuffer) {
-      console.error('[email] All invoice generation methods failed for order placed confirmation:', orderId);
-    }
+    // A4 PDF invoice; falls back to PNG (never SVG) when Chromium is missing.
+    const invoiceAttachment = await buildInvoiceAttachment({
+      order,
+      customerEmail,
+      customerName,
+      senderEmail: EMAIL_CONFIG.sender,
+      title: 'Order Invoice',
+    });
 
     // Include attachment note only when the invoice was actually generated
-    const invoiceNoteHtml = finalInvoiceBuffer
+    const invoiceNoteHtml = invoiceAttachment
       ? '<p style="font-size:14px;line-height:1.6;margin:16px 0;">We have attached your order invoice to this email for your records.</p>'
       : '';
-    const invoiceNoteText = finalInvoiceBuffer
+    const invoiceNoteText = invoiceAttachment
       ? 'We have attached your order invoice to this email for your records.\n'
       : '';
 
-    const attachment = finalInvoiceBuffer
-      ? [{
-          filename: finalInvoiceFilename,
-          content: finalInvoiceBuffer,
-          contentType: finalInvoiceContentType,
-        }]
-      : [];
+    const attachment = invoiceAttachment ? [invoiceAttachment] : [];
 
     const deliveryType = order?.isHomeDelivery ? 'Home Delivery' : 'Store Pickup';
     const deliveryZone = order?.isInsideValley ? 'Inside Valley' : 'Outside Valley';
@@ -804,7 +763,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
               <p style="margin:8px 0 0;font-size:14px;color:#9ca3af;">Thank you for your order!</p>
             </div>
             <div style="padding:24px 22px;">
-              <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${customerName},</p>
+              <p style="font-size:14px;line-height:1.6;margin:0 0 12px;">Dear ${escapeHtml(customerName)},</p>
               <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">
                 Thank you for your order! We have received your order and it is now being reviewed by our team.
                 You will receive another confirmation email once your order is approved.
@@ -814,6 +773,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
               <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:16px 0;">
                 <h3 style="margin:0 0 12px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Order Details</h3>
                 <p style="margin:4px 0;font-size:14px;"><strong>Order ID:</strong> <span style="font-family:monospace;color:#2563eb;font-weight:700;">${orderId}</span></p>
+                <p style="margin:4px 0;font-size:14px;"><strong>Name:</strong> ${escapeHtml(customerName)}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Payment:</strong> ${paymentMethod}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Shipping Address:</strong> ${shippingLocation}</p>
                 <p style="margin:4px 0;font-size:14px;"><strong>Grand Total:</strong> <span style="color:#166534;font-weight:700;font-size:16px;">${formatCurrency(totalAmount)}</span></p>
@@ -868,7 +828,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
               <p style="font-size:14px;line-height:1.6;margin:16px 0;">
                 If you have any questions, please contact us at ${EMAIL_CONFIG.sender}.
               </p>
-              <p style="font-size:14px;line-height:1.6;margin:18px 0 0;">Thank you for shopping with Aabhushan Gallery.</p>
+              <p style="font-size:14px;line-height:1.6;margin:18px 0 0;">Thank you for shopping with Abhushan Gallery.</p>
             </div>
             ${buildFooterHtml()}
           </div>
@@ -886,6 +846,7 @@ You will receive another confirmation email once your order is approved.
 
 ORDER DETAILS
 Order ID: ${orderId}
+Name: ${customerName}
 Payment: ${paymentMethod}
 Shipping Address: ${shippingLocation}
 Grand Total: ${formatCurrency(totalAmount)}
@@ -905,13 +866,13 @@ ${giftBoxCharge > 0 ? `Gift Box: ${formatCurrency(giftBoxCharge)}\n` : ''}Grand 
 
 ${invoiceNoteText}If you have any questions, contact us at ${EMAIL_CONFIG.sender}.
 
-Thank you for shopping with Aabhushan Gallery.
+Thank you for shopping with Abhushan Gallery.
 ${buildFooterText()}`;
 
     const { messageId, date, customHeaders } = buildCommonHeaders({ to: customerEmail, subject });
 
     await transporter.sendMail({
-      from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+      from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
       to: customerEmail,
       subject,
       html,
@@ -923,7 +884,7 @@ ${buildFooterText()}`;
       replyTo: EMAIL_CONFIG.sender,
     });
 
-    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId, finalInvoiceBuffer ? `(with invoice: ${finalInvoiceFilename})` : '(without invoice)');
+    console.log('Order placed confirmation email sent to:', customerEmail, 'for order:', orderId, invoiceAttachment ? `(with invoice: ${invoiceAttachment.filename})` : '(without invoice)');
     return true;
   } catch (error) {
     console.error('Error sending order placed confirmation email:', error?.message || error);
@@ -1019,7 +980,7 @@ ${buildFooterText()}`;
   });
 
   await transporter.sendMail({
-    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+    from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
     to: recipientEmail,
     subject,
     html: buildEmailShell({
@@ -1047,6 +1008,9 @@ module.exports = {
   sendOrderConfirmationToCustomer,
   sendOrderPlacedConfirmationToCustomer,
   sendRestockAvailableEmail,
+  // Shared so the manual /send-invoice endpoint renders the attachment through
+  // the same PDF → PNG chain as the automatic order emails.
+  buildInvoiceAttachment,
 
   transporter,
   EMAIL_CONFIG,

@@ -15,8 +15,8 @@ const {
 } = require('../services/emailTemplate');
 const {
   buildInvoiceHtml,
-  generateInvoicePdfBuffer,
 } = require('../services/invoiceRenderer.service');
+const {buildInvoiceAttachment} = require('../services/emailServices');
 
 // Initialize Google OAuth client
 const client = new OAuth2Client('58815171868-hlpv60089h5p8286562i2bde9htijb74.apps.googleusercontent.com');
@@ -880,7 +880,9 @@ exports.sendInvoiceEmail = async (req, res) => {
       title: 'Invoice',
     });
 
-    const invoicePdf = await generateInvoicePdfBuffer({
+    // A4 PDF; falls back to PNG when Chromium is unavailable, so the customer
+    // never receives a format their mail client cannot open.
+    const invoiceAttachment = await buildInvoiceAttachment({
       order,
       customerEmail,
       customerName,
@@ -889,12 +891,10 @@ exports.sendInvoiceEmail = async (req, res) => {
     });
 
     const attachments = [...getLogoAttachment()];
-    if (invoicePdf) {
-      attachments.push({
-        filename: `invoice-${order.productOrderId || order._id.toString().slice(-8).toUpperCase()}.pdf`,
-        content: invoicePdf,
-        contentType: 'application/pdf',
-      });
+    if (invoiceAttachment) {
+      attachments.push(invoiceAttachment);
+    } else {
+      console.error('Invoice could not be rendered for order', orderId, '- sending without attachment');
     }
 
     // Send email using transporter

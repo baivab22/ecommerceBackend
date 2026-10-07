@@ -7,7 +7,10 @@
     "dev": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "verify:confirm-bulk": "node scripts/verify-confirm-bulk.js"
+    "verify:confirm-bulk": "node scripts/verify-confirm-bulk.js",
+    "test:analytics": "node scripts/test-analytics-time.js",
+    "verify:analytics": "node scripts/verify-analytics-pipeline.js",
+    "verify:single-page": "node scripts/verify-single-page-visit.js"
   },
   "keywords": [],
   "author": "",

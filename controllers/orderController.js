@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Orders = require("../modals/orderModal");
+const User = require("../modals/userModal");
 const { Product } = require("../modals/product.modal");
 const Coupon = require("../modals/coupon.modal");
 const {
@@ -248,6 +249,23 @@ exports.createOrder = async (req, res) => {
   const normalizedPhoneNumber = normalizeOrderPhone(orderBody?.phoneNumber);
   const isPhonePayOrder = orderBody.paymentMethod === PHONE_PAY;
 
+  // The customer name is entered in the cart checkout form and sent as
+  // orderBody.name. Older clients may not send it yet, so fall back to the
+  // account name — a stale tab must never fail an otherwise valid order.
+  let normalizedName = String(orderBody?.name || orderBody?.fullName || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+
+  if (!normalizedName && orderBody?.userId && mongoose.Types.ObjectId.isValid(String(orderBody.userId))) {
+    try {
+      const accountUser = await User.findById(orderBody.userId).select('name').lean();
+      normalizedName = String(accountUser?.name || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    } catch (nameLookupError) {
+      console.error('Could not resolve account name for order:', nameLookupError?.message || nameLookupError);
+    }
+  }
+
   const rejectOrder = async (status, message, extra = {}) => {
     await removeUploadedScreenshot(screenshotFile);
     return res.status(status).json({ error: message, ...extra });
@@ -345,6 +363,7 @@ exports.createOrder = async (req, res) => {
       userId: orderBody.userId,
       email: orderBody.email,
       fullName: orderBody.fullName,
+      name: normalizedName || undefined,
       isGuestCheckout: orderBody.isGuestCheckout,
       products: orderProducts,
       giftBoxCharge: orderBody.giftBoxCharge,
@@ -492,6 +511,8 @@ exports.getOrderedProductList = async (req, res) => {
           { paymentMethod: regex },
           { deliveryPartner: regex },
           { phoneNumber: regex },
+          { name: regex },
+          { fullName: regex },
         ]
       };
     }
@@ -531,6 +552,10 @@ exports.getOrderedProductList = async (req, res) => {
     if (search) {
       const regex = new RegExp(search, 'i');
       filteredOrders = ordersList.filter(order => {
+        // Customer name entered at checkout (order.name) is searchable on its
+        // own; fullName is the older guest-checkout spelling of the same thing.
+        if (order.name && regex.test(order.name)) return true;
+        if (order.fullName && regex.test(order.fullName)) return true;
         // User fields
         if (order.userId) {
           if (order.userId.email && regex.test(order.userId.email)) return true;

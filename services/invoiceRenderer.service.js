@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { getLogoDataUri } = require('./logoAsset.service');
 
 const escapeHtml = (value) =>
@@ -153,13 +154,16 @@ const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, t
     title,
     paymentMethod: getPaymentMethodLabel(order?.paymentMethod),
     seller: {
-      name: 'Aabhushan Gallery',
+      name: 'Abhushan Gallery',
       address: 'Kalimati, Kathmandu, Nepal',
       phone: '+977 9861698400',
       email: senderEmail || 'support@aabhushangallery.com',
     },
     customer: {
-      name: customerName || order?.fullName || 'Valued Customer',
+      // customerName is derived from order.name first (see emailServices), so
+      // the invoice shows the name typed at checkout rather than the account
+      // name. The later fallbacks keep older orders printing something.
+      name: customerName || order?.name || order?.fullName || 'Valued Customer',
       address: [order?.shippingLocation, order?.locationAddress].filter(Boolean).join(', ') || 'N/A',
       phone: order?.phoneNumber || 'N/A',
       email: customerEmail || order?.userId?.email || 'N/A',
@@ -580,6 +584,7 @@ const buildInvoiceHtml = (params) => {
 // ─── BROWSER ─────────────────────────────────────────────────────────────────
 
 let _puppeteerCache = null;
+let _sharpCache;
 
 const _loadPuppeteer = () => {
   if (_puppeteerCache !== null) return _puppeteerCache;
@@ -593,14 +598,62 @@ const _loadPuppeteer = () => {
   }
 };
 
+// Servers that run `npm ci --omit=dev` (cPanel included) often skip Puppeteer's
+// postinstall, which is what downloads the bundled Chrome. PDF generation then
+// fails with "Could not find Chrome" and the caller silently degrades to a
+// fallback format. Resolve an executable explicitly and, failing that, say so
+// loudly instead of returning null and letting the format change unnoticed.
+const CHROME_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  process.env.CHROME_PATH,
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+].filter(Boolean);
+
+const _resolveExecutablePath = () => {
+  // If Puppeteer's own download succeeded, use it — it is version-matched.
+  try {
+    const bundled = _loadPuppeteer()?.executablePath?.();
+    if (bundled && fs.existsSync(bundled)) return bundled;
+  } catch {
+    // fall through to system browsers
+  }
+
+  for (const candidate of CHROME_CANDIDATES) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // ignore unreadable paths
+    }
+  }
+
+  return null;
+};
+
 const _launchBrowser = async () => {
   const puppeteer = _loadPuppeteer();
   if (!puppeteer) {
     return { browser: null, error: 'puppeteer is not installed' };
   }
+
+  const executablePath = _resolveExecutablePath();
+  if (!executablePath) {
+    return {
+      browser: null,
+      error:
+        'No Chrome/Chromium binary found. Run `npx puppeteer browsers install chrome`, ' +
+        'or set PUPPETEER_EXECUTABLE_PATH.',
+    };
+  }
+
   try {
     const browser = await puppeteer.launch({
       headless: true,
+      executablePath,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -644,7 +697,7 @@ const generateInvoicePdfBuffer = async (params) => {
     const launched = await _launchBrowser();
     if (!launched.browser) {
       console.error(
-        '[invoice] Browser launch failed — will fall back to vector SVG invoice:',
+        '[invoice] Browser launch failed — falling back to PNG invoice:',
         launched.error
       );
       return null;
@@ -750,7 +803,7 @@ const buildInvoiceSvgMarkup = (data) => {
     );
   }
   const brandX = M + (logoHref ? logoW + 14 : 0);
-  const brandNameLines = wrapLines(data.seller?.name || 'Aabhushan Gallery', 34);
+  const brandNameLines = wrapLines(data.seller?.name || 'Abhushan Gallery', 34);
   let by = Math.round((headerH - logoH) / 2) + 26;
   brandNameLines.forEach((ln) => {
     p.push(T(brandX, by, 24, '#111827', escapeHtml(ln), ' font-weight="bold"'));
@@ -905,11 +958,49 @@ const buildInvoiceSvg = (params) => {
 const generateInvoiceSvgBuffer = (params) =>
   Buffer.from(buildInvoiceSvg(params), 'utf8');
 
+// ─── RASTER FALLBACK ─────────────────────────────────────────────────────────
+// Email clients render SVG inconsistently — several refuse to display it at
+// all, and Outlook/Word-based clients treat it as an untrusted document. So the
+// no-Chromium path rasterises the same markup to PNG rather than shipping a
+// vector file the customer cannot open. Rasterising needs no browser, which is
+// the entire point: this is the path taken when Chromium is unavailable.
+
+const _loadSharp = () => {
+  if (_sharpCache !== undefined) return _sharpCache;
+  try {
+    _sharpCache = require('sharp');
+  } catch (err) {
+    console.error('[invoice] sharp not available for raster fallback:', err.message);
+    _sharpCache = null;
+  }
+  return _sharpCache;
+};
+
+// 2x density against an A4-ish viewBox keeps text crisp at 100% zoom on a
+// retina screen without producing a file too large to email.
+const RASTER_DENSITY = 200;
+
+const generateInvoicePngBuffer = async (params) => {
+  const sharpLib = _loadSharp();
+  if (!sharpLib) return null;
+
+  try {
+    const svg = buildInvoiceSvg(params);
+    return await sharpLib(Buffer.from(svg, 'utf8'), { density: RASTER_DENSITY })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+  } catch (err) {
+    console.error('[invoice] PNG rasterisation failed:', err.message);
+    return null;
+  }
+};
+
 module.exports = {
   buildInvoiceHtml,
   buildInvoiceSvg,
   generateInvoicePdfBuffer,
   generateInvoiceSvgBuffer,
+  generateInvoicePngBuffer,
   extractInvoiceData,
   formatCurrency,
 };

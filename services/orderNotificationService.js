@@ -129,7 +129,7 @@ Final Total: ${totalAmount}
 If you have questions, contact us at ${EMAIL_CONFIG.sender}.`;
 
   const mailOptions = {
-    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+    from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
     to: customerEmail,
     subject: emailSubject,
     html: buildEmailShell({
@@ -293,7 +293,7 @@ We will continue to share updates until your package is delivered.
 Contact us at ${EMAIL_CONFIG.sender} if you have questions.`;
 
   const mailOptions = {
-    from: `"Aabhushan Gallery" <${EMAIL_CONFIG.sender}>`,
+    from: `"Abhushan Gallery" <${EMAIL_CONFIG.sender}>`,
     to: customerEmail,
     subject: emailSubject,
     html: buildEmailShell({
