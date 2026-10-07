@@ -56,13 +56,19 @@ const readText = (buf) => {
     const start = m.index + m[0].length;
     const end = raw.indexOf('endstream', start);
     if (end === -1) break;
-    try {
-      const stream = zlib.inflateSync(buf.slice(start, end)).toString('latin1');
-      if (/TJ|Tj/.test(stream)) chunks.push(stream);
-    } catch {
-      /* not a Flate stream */
+    // Image XObjects (the header logo) are binary — never decode them as text.
+    const dict = raw.slice(Math.max(0, m.index - 400), m.index);
+    if (!dict.includes('/Subtype /Image')) {
+      try {
+        const stream = zlib.inflateSync(buf.slice(start, end)).toString('latin1');
+        if (/TJ|Tj/.test(stream)) chunks.push(stream);
+      } catch {
+        /* not a Flate stream */
+      }
     }
-    re.lastIndex = end;
+    // Step past "endstream" so the next match is the following stream, not the
+    // "stream" keyword hidden inside the "endstream" keyword itself.
+    re.lastIndex = end + 'endstream'.length;
   }
 
   return chunks

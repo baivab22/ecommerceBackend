@@ -1359,9 +1359,122 @@ const _bareRgb = (color) => {
 
 const _bareNum = (n) => String(Math.round(n * 100) / 100);
 
+// PNG → raw pixels, decoded with nothing but zlib (a Node built-in), so the
+// bare renderer can still stamp the brand logo without depending on any image
+// package. Handles the 8-bit, non-interlaced variants real logos ship as;
+// anything else returns null and the header simply stays set in type.
+const _barePngDecode = (pngBuf) => {
+  try {
+    const zlib = require('zlib');
+    if (!pngBuf || pngBuf.length < 33 || pngBuf.slice(1, 4).toString('ascii') !== 'PNG') return null;
+
+    let pos = 8;
+    let ihdr = null;
+    let plte = null;
+    const idat = [];
+    while (pos + 12 <= pngBuf.length) {
+      const len = pngBuf.readUInt32BE(pos);
+      const type = pngBuf.slice(pos + 4, pos + 8).toString('ascii');
+      const start = pos + 8;
+      const end = start + len;
+      if (end + 4 > pngBuf.length) break;
+      if (type === 'IHDR') ihdr = pngBuf.slice(start, end);
+      else if (type === 'PLTE') plte = pngBuf.slice(start, end);
+      else if (type === 'IDAT') idat.push(pngBuf.slice(start, end));
+      else if (type === 'IEND') break;
+      pos = end + 4;
+    }
+    if (!ihdr || !idat.length || ihdr.length < 13) return null;
+
+    const width = ihdr.readUInt32BE(0);
+    const height = ihdr.readUInt32BE(4);
+    const bitDepth = ihdr[8];
+    const colorType = ihdr[9];
+    const interlace = ihdr[12];
+    const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+    if (!width || !height || bitDepth !== 8 || interlace !== 0 || !channels) return null;
+
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const stride = width * channels;
+    if (raw.length < (stride + 1) * height) return null;
+
+    // Undo the per-scanline PNG filters (types 0–4).
+    const unfiltered = Buffer.alloc(stride * height);
+    for (let y = 0; y < height; y++) {
+      const filter = raw[y * (stride + 1)];
+      const src = y * (stride + 1) + 1;
+      const dst = y * stride;
+      for (let i = 0; i < stride; i++) {
+        const x = raw[src + i];
+        const a = i >= channels ? unfiltered[dst + i - channels] : 0;
+        const b = y > 0 ? unfiltered[dst - stride + i] : 0;
+        const c = y > 0 && i >= channels ? unfiltered[dst - stride + i - channels] : 0;
+        let v;
+        if (filter === 0) v = x;
+        else if (filter === 1) v = x + a;
+        else if (filter === 2) v = x + b;
+        else if (filter === 3) v = x + ((a + b) >> 1);
+        else if (filter === 4) {
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+        } else return null;
+        unfiltered[dst + i] = v & 0xff;
+      }
+    }
+
+    // Pack into PDF-friendly RGB; the alpha channel becomes a separate mask.
+    const rgb = Buffer.alloc(width * height * 3);
+    const alpha = colorType === 4 || colorType === 6 ? Buffer.alloc(width * height) : null;
+    let p = 0;
+    for (let i = 0; i < width * height; i++) {
+      const q = i * channels;
+      if (colorType === 6) {
+        rgb[p++] = unfiltered[q];
+        rgb[p++] = unfiltered[q + 1];
+        rgb[p++] = unfiltered[q + 2];
+        alpha[i] = unfiltered[q + 3];
+      } else if (colorType === 2) {
+        rgb[p++] = unfiltered[q];
+        rgb[p++] = unfiltered[q + 1];
+        rgb[p++] = unfiltered[q + 2];
+      } else if (colorType === 4) {
+        const g = unfiltered[q];
+        rgb[p++] = g;
+        rgb[p++] = g;
+        rgb[p++] = g;
+        alpha[i] = unfiltered[q + 1];
+      } else if (colorType === 3) {
+        const idx = unfiltered[q];
+        if (!plte || idx * 3 + 2 >= plte.length) return null;
+        rgb[p++] = plte[idx * 3];
+        rgb[p++] = plte[idx * 3 + 1];
+        rgb[p++] = plte[idx * 3 + 2];
+      } else {
+        const g = unfiltered[q];
+        rgb[p++] = g;
+        rgb[p++] = g;
+        rgb[p++] = g;
+      }
+    }
+
+    return {
+      width,
+      height,
+      rgb,
+      alpha: alpha && alpha.some((v) => v !== 255) ? alpha : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
 // A tiny drawing surface with the pdfkit-shaped API the invoice layout uses.
 const _createBarePdf = () => {
   const pages = [];
+  const images = []; // decoded bitmaps (the header logo), shared by every page
   let ops = [];
   const newPage = () => {
     if (ops.length) pages.push(ops);
@@ -1470,6 +1583,25 @@ const _createBarePdf = () => {
 
   const addPage = () => newPage();
 
+  // Draw a decoded PNG (`_barePngDecode`) with its TOP-left corner at (x, yTop).
+  // Returns the y coordinate just below it; a missing image leaves y untouched
+  // so the layout still works without a logo.
+  const image = (img, x, yTop, opts = {}) => {
+    if (!img || !img.rgb) return yTop;
+    let entry = images.find((e) => e.data === img);
+    if (!entry) {
+      entry = { name: `Im${images.length + 1}`, data: img };
+      images.push(entry);
+    }
+    const h = opts.height || img.height;
+    const w = Math.round((h * img.width) / img.height);
+    const yBottom = NATIVE_PAGE.height - yTop - h;
+    ops.push(
+      `q ${_bareNum(w)} 0 0 ${_bareNum(h)} ${_bareNum(x)} ${_bareNum(yBottom)} cm /${entry.name} Do Q`
+    );
+    return yTop + h;
+  };
+
   // Assemble a complete PDF file: catalog, page tree, base-14 fonts, info and
   // one Flate-compressed content stream per page, with a byte-accurate xref.
   const render = (meta = {}) => {
@@ -1487,7 +1619,10 @@ const _createBarePdf = () => {
       `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}+00'00'`;
 
     const nPages = renderedPages.length;
-    const firstPageObj = 6;
+    // Object numbers: 1 catalog, 2 pages, 3/4 fonts, 5 info, then the logo
+    // image XObjects, then page/content pairs.
+    const nImageObjs = images.reduce((n, img) => n + (img.data.alpha ? 2 : 1), 0);
+    const firstPageObj = 6 + nImageObjs;
     for (let i = 0; i < nPages; i++) pageObjs.push(firstPageObj + i * 2);
 
     bodies.push('<< /Type /Catalog /Pages 2 0 R >>'); // 1
@@ -1502,12 +1637,53 @@ const _createBarePdf = () => {
       ` /CreationDate (${creationDate}) >>`
     ); // 5
 
+    // Header logo as image XObjects (object numbers 6..), then the pages.
+    const xobjectResources = [];
+    images.forEach((img) => {
+      const mainNum = bodies.length;
+      const smaskNum = img.data.alpha ? mainNum + 1 : 0;
+      const rgbDeflated = zlib.deflateSync(img.data.rgb, { level: 9 });
+      bodies.push(
+        Buffer.concat([
+          Buffer.from(
+            `<< /Type /XObject /Subtype /Image /Width ${img.data.width} /Height ${img.data.height}` +
+              ` /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode` +
+              `${smaskNum ? ` /SMask ${smaskNum} 0 R` : ''} /Length ${rgbDeflated.length} >>\nstream\n`,
+            'latin1'
+          ),
+          rgbDeflated,
+          Buffer.from('\nendstream', 'latin1'),
+        ])
+      );
+      if (smaskNum) {
+        const alphaDeflated = zlib.deflateSync(img.data.alpha, { level: 9 });
+        bodies.push(
+          Buffer.concat([
+            Buffer.from(
+              `<< /Type /XObject /Subtype /Image /Width ${img.data.width} /Height ${img.data.height}` +
+                ` /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode` +
+                ` /Length ${alphaDeflated.length} >>\nstream\n`,
+              'latin1'
+            ),
+            alphaDeflated,
+            Buffer.from('\nendstream', 'latin1'),
+          ])
+        );
+      }
+      xobjectResources.push(`/${img.name} ${mainNum} 0 R`);
+    });
+
+    const xobjectDict = xobjectResources.length
+      ? ` /XObject << ${xobjectResources.join(' ')} >>`
+      : '';
+
     renderedPages.forEach((pageOps, i) => {
       const stream = Buffer.from(pageOps.join('\n'), 'latin1');
       const deflated = zlib.deflateSync(stream, { level: 9 });
       bodies.push(
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${NATIVE_PAGE.width} ${NATIVE_PAGE.height}]` +
-        ` /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${firstPageObj + i * 2 + 1} 0 R >>`
+          ` /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${xobjectDict} >>` +
+          ` /Contents ${firstPageObj + i * 2 + 1} 0 R >>`
       );
       bodies.push(
         Buffer.concat([
@@ -1548,12 +1724,13 @@ const _createBarePdf = () => {
     return Buffer.concat(chunks);
   };
 
-  return { text, rect, line, heightOfString, addPage, render };
+  return { text, rect, line, heightOfString, image, addPage, render };
 };
 
 // Same layout as the pdfkit renderer, drawn through the bare surface above.
-// The raster logo is deliberately skipped (this path must not depend on image
-// decoding) — the header is set in type instead.
+// The logo is decoded straight from the PNG with zlib (see `_barePngDecode`),
+// so this path still needs no image package; if the file cannot be decoded the
+// header falls back to being set in type only.
 const _drawBareInvoice = (c, data) => {
   const L = NATIVE_MARGIN;
   const R = NATIVE_PAGE.width - NATIVE_MARGIN;
@@ -1564,11 +1741,20 @@ const _drawBareInvoice = (c, data) => {
 
   // ── HEADER ──
   const headerTop = 34;
-  const brandW = W * 0.55;
+  // Same header as the pdfkit renderer: the brand logo on the left, the name
+  // and contact block beside it. Without a decodable logo the text simply
+  // starts at the left margin, exactly as before.
+  const logo = _barePngDecode(_logoBuffer());
+  const logoH = 58;
+  const logoW = logo ? Math.round((logoH * logo.width) / logo.height) : 0;
+  if (logo) c.image(logo, L, headerTop, { height: logoH });
+
+  const brandX = L + (logo ? logoW + 14 : 0);
+  const brandW = Math.max(150, L + W * 0.55 - brandX);
   let leftY = headerTop;
-  leftY = c.text(String(seller.name || 'Abhushan Gallery'), L, leftY, { size: 16, bold: true, color: C.ink, width: brandW });
-  leftY = c.text(String(seller.address || ''), L, leftY + 2, { size: 8.5, color: C.muted, width: brandW, lineGap: 2 });
-  leftY = c.text(`${seller.phone || ''}  |  ${seller.email || ''}`, L, leftY, { size: 8.5, color: C.muted, width: brandW });
+  leftY = c.text(String(seller.name || 'Abhushan Gallery'), brandX, leftY, { size: 16, bold: true, color: C.ink, width: brandW });
+  leftY = c.text(String(seller.address || ''), brandX, leftY + 2, { size: 8.5, color: C.muted, width: brandW, lineGap: 2 });
+  leftY = c.text(`${seller.phone || ''}  |  ${seller.email || ''}`, brandX, leftY, { size: 8.5, color: C.muted, width: brandW });
 
   let rightY = headerTop + 2;
   rightY = c.text('INVOICE', L, rightY, { size: 21, bold: true, color: C.ink, width: W, align: 'right', charSpacing: 3 });
