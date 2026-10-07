@@ -8,6 +8,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
     "verify:confirm-bulk": "node scripts/verify-confirm-bulk.js",
+    "verify:invoice-pdf": "node scripts/verify-invoice-pdf.js",
     "test:analytics": "node scripts/test-analytics-time.js",
     "verify:analytics": "node scripts/verify-analytics-pipeline.js",
     "verify:single-page": "node scripts/verify-single-page-visit.js"
@@ -27,6 +28,7 @@
     "mongoose": "^8.0.3",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.16",
+    "pdfkit": "^0.20.2",
     "puppeteer": "^24.7.2",
     "react-zoom-slider": "^0.1.0",
     "sharp": "^0.35.3",

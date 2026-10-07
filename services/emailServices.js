@@ -9,7 +9,7 @@ const { buildEmailShell, getLogoAttachment } = require('./emailTemplate');
 const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePdfBuffer,
-  generateInvoicePngBuffer,
+  generateInvoiceNativePdfBuffer,
 } = require('./invoiceRenderer.service');
 
 const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
@@ -17,11 +17,15 @@ const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
 /**
  * Build the invoice attachment for an order email.
  *
- * PDF is the intended format. If Chromium is unavailable, the same invoice is
- * rasterised to PNG rather than attaching SVG: several mail clients will not
- * render an SVG attachment at all, so the customer received an unopenable file.
- * Never falls back to a format the customer cannot view — returns null and lets
- * the caller send the email without an attachment instead.
+ * Always a PDF, in two flavours:
+ *   1. Chromium-rendered (puppeteer) — the full A4 layout with pagination.
+ *   2. Native (pdfkit) — used when no Chrome binary is available. It draws the
+ *      same invoice as real PDF text, so the characters are always correct.
+ *
+ * The old PNG raster fallback is gone on purpose: on hosts without Chromium it
+ * produced an image whose glyphs were missing/garbled, and an image is not a
+ * document the customer can print or keep. Returns null (send without an
+ * attachment) only if both PDF paths fail.
  */
 const buildInvoiceAttachment = async ({ order, customerEmail, customerName, senderEmail, title }) => {
   const orderId = order.productOrderId || order._id.toString().slice(-8).toUpperCase();
@@ -31,25 +35,25 @@ const buildInvoiceAttachment = async ({ order, customerEmail, customerName, send
     const pdf = await generateInvoicePdfBuffer(rendererParams);
     if (pdf) {
       const buffer = Buffer.from(pdf);
-      console.log(`[invoice] PDF generated: ${buffer.length} bytes`);
+      console.log(`[invoice] PDF generated (Chromium): ${buffer.length} bytes`);
       return { filename: `invoice-${orderId}.pdf`, content: buffer, contentType: 'application/pdf' };
     }
   } catch (error) {
-    console.error(`[invoice] PDF generation failed for ${orderId}:`, error?.message);
+    console.error(`[invoice] Chromium PDF generation failed for ${orderId}:`, error?.message);
   }
 
   try {
-    const png = await generateInvoicePngBuffer(rendererParams);
-    if (png) {
-      const buffer = Buffer.from(png);
-      console.log(`[invoice] PNG fallback generated: ${buffer.length} bytes`);
-      return { filename: `invoice-${orderId}.png`, content: buffer, contentType: 'image/png' };
+    const pdf = await generateInvoiceNativePdfBuffer(rendererParams);
+    if (pdf) {
+      const buffer = Buffer.from(pdf);
+      console.log(`[invoice] PDF generated (native fallback): ${buffer.length} bytes`);
+      return { filename: `invoice-${orderId}.pdf`, content: buffer, contentType: 'application/pdf' };
     }
   } catch (error) {
-    console.error(`[invoice] PNG generation failed for ${orderId}:`, error?.message);
+    console.error(`[invoice] native PDF generation failed for ${orderId}:`, error?.message);
   }
 
-  console.error(`[invoice] Could not render an invoice attachment for ${orderId}; sending without one.`);
+  console.error(`[invoice] Could not render a PDF invoice for ${orderId}; sending without an attachment.`);
   return null;
 };
 
@@ -528,7 +532,8 @@ const sendOrderConfirmationToCustomer = async (order) => {
 
     const subject = `Order Confirmed - ${orderId}`;
 
-    // A4 PDF invoice; falls back to PNG (never SVG) when Chromium is missing.
+    // A4 PDF invoice; falls back to the browser-free PDF renderer when
+    // Chromium is unavailable. Either way the attachment is a PDF.
     const invoiceAttachment = await buildInvoiceAttachment({
       order,
       customerEmail,
@@ -726,7 +731,8 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
 
     const subject = `Order Received - ${orderId}`;
 
-    // A4 PDF invoice; falls back to PNG (never SVG) when Chromium is missing.
+    // A4 PDF invoice; falls back to the browser-free PDF renderer when
+    // Chromium is unavailable. Either way the attachment is a PDF.
     const invoiceAttachment = await buildInvoiceAttachment({
       order,
       customerEmail,

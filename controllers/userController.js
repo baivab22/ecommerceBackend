@@ -880,8 +880,9 @@ exports.sendInvoiceEmail = async (req, res) => {
       title: 'Invoice',
     });
 
-    // A4 PDF; falls back to PNG when Chromium is unavailable, so the customer
-    // never receives a format their mail client cannot open.
+    // A4 PDF, always: Chromium first, then the browser-free PDF renderer, so
+    // the customer never receives an image (or a format their mail client
+    // cannot open).
     const invoiceAttachment = await buildInvoiceAttachment({
       order,
       customerEmail,

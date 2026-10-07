@@ -697,7 +697,7 @@ const generateInvoicePdfBuffer = async (params) => {
     const launched = await _launchBrowser();
     if (!launched.browser) {
       console.error(
-        '[invoice] Browser launch failed — falling back to PNG invoice:',
+        '[invoice] Browser launch failed — using the native PDF renderer:',
         launched.error
       );
       return null;
@@ -995,10 +995,301 @@ const generateInvoicePngBuffer = async (params) => {
   }
 };
 
+// ─── NATIVE PDF FALLBACK (no Chromium) ───────────────────────────────────────
+// Puppeteer needs a Chrome binary. On hosts where it is missing (a cPanel
+// `npm ci --omit=dev` skips Puppeteer's Chrome download) the old behaviour was
+// to rasterise the invoice to SVG and hand that to sharp — and librsvg on those
+// machines has no matching fonts, so the customer received an image bill with
+// broken or missing glyphs.
+//
+// This renderer draws the same invoice data directly as a real PDF: text is
+// text (selectable, searchable, always the right characters) using the PDF
+// standard Helvetica fonts, which require no browser and no system fonts at
+// all. It is the guaranteed PDF path — used whenever Chromium cannot run.
+
+const NATIVE_PAGE = { width: 595.28, height: 841.89 }; // A4 in points
+const NATIVE_MARGIN = 42.5; // 15mm
+const NATIVE_BOTTOM_RESERVE = 56; // never draw table rows below this
+
+const NATIVE_COLORS = {
+  ink: '#111827',
+  body: '#374151',
+  muted: '#6B7280',
+  light: '#9CA3AF',
+  border: '#E5E7EB',
+  rule: '#D1D5DB',
+  bg: '#F9FAFB',
+  white: '#ffffff',
+};
+
+let _pdfKitCache;
+const _loadPdfKit = () => {
+  if (_pdfKitCache !== undefined) return _pdfKitCache;
+  try {
+    _pdfKitCache = require('pdfkit');
+  } catch (err) {
+    console.error('[invoice] pdfkit not available for native PDF fallback:', err.message);
+    _pdfKitCache = null;
+  }
+  return _pdfKitCache;
+};
+
+// PNG dimensions straight from the IHDR chunk — enough to scale the logo
+// without pulling in an image decoder.
+const _readPngSize = (buf) => {
+  try {
+    if (buf && buf.length > 24 && buf.slice(1, 4).toString('ascii') === 'PNG') {
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+  } catch {
+    // unreadable buffer — treat as no logo
+  }
+  return null;
+};
+
+const _logoBuffer = () => {
+  const dataUri = getLogoDataUri();
+  if (!dataUri || !dataUri.startsWith('data:image/png;base64,')) return null;
+  try {
+    return Buffer.from(dataUri.slice(dataUri.indexOf(',') + 1), 'base64');
+  } catch {
+    return null;
+  }
+};
+
+const _drawNativeInvoice = (doc, data) => {
+  const L = NATIVE_MARGIN;
+  const R = NATIVE_PAGE.width - NATIVE_MARGIN;
+  const W = R - L;
+  const seller = data.seller || {};
+  const customer = data.customer || {};
+
+  // ── HEADER ──
+  const headerTop = 34;
+  const logoBuf = _logoBuffer();
+  const logoSize = logoBuf ? _readPngSize(logoBuf) : null;
+  const logoH = 58;
+  const logoW = logoSize ? Math.round(logoH * (logoSize.width / logoSize.height)) : 0;
+  if (logoBuf) doc.image(logoBuf, L, headerTop, { height: logoH });
+
+  const brandX = L + (logoBuf ? logoW + 14 : 0);
+  const brandW = Math.max(150, L + W * 0.55 - brandX);
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(NATIVE_COLORS.ink)
+    .text(String(seller.name || 'Abhushan Gallery'), brandX, headerTop + 6, { width: brandW });
+  doc.font('Helvetica').fontSize(8.5).fillColor(NATIVE_COLORS.muted)
+    .text(String(seller.address || ''), brandX, doc.y + 4, { width: brandW, lineGap: 2 });
+  doc.text(`${seller.phone || ''}  |  ${seller.email || ''}`, doc.x, doc.y, { width: brandW });
+
+  doc.font('Helvetica-Bold').fontSize(21).fillColor(NATIVE_COLORS.ink)
+    .text('INVOICE', L, headerTop + 2, { width: W, align: 'right', characterSpacing: 3 });
+  doc.font('Helvetica').fontSize(9).fillColor(NATIVE_COLORS.muted)
+    .text(String(data.title || 'Order Confirmation'), L, doc.y + 5, { width: W, align: 'right' });
+
+  const headerBottom = Math.max(doc.y, headerTop + logoH) + 16;
+  doc.rect(0, headerBottom, NATIVE_PAGE.width, 3.4).fill(NATIVE_COLORS.ink);
+
+  // ── META BAR ──
+  const metaTop = headerBottom + 3.4;
+  const metaH = 40;
+  doc.rect(0, metaTop, NATIVE_PAGE.width, metaH).fill(NATIVE_COLORS.bg);
+  doc.rect(0, metaTop + metaH - 1, NATIVE_PAGE.width, 1).fill(NATIVE_COLORS.border);
+
+  const cellW = W / 4;
+  [
+    ['Invoice No.', `#${data.invoiceNo || 'N/A'}`],
+    ['Date', data.date || 'N/A'],
+    ['Payment Method', data.paymentMethod || 'N/A'],
+    ['Order No.', `#${data.orderNo || 'N/A'}`],
+  ].forEach(([label, value], i) => {
+    const cx = L + i * cellW;
+    if (i > 0) doc.rect(cx - 7, metaTop + 8, 1, metaH - 16).fill(NATIVE_COLORS.border);
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(NATIVE_COLORS.light)
+      .text(label.toUpperCase(), cx, metaTop + 10, { width: cellW - 12, characterSpacing: 1 });
+    doc.font('Helvetica-Bold').fontSize(9.5).fillColor(NATIVE_COLORS.ink)
+      .text(String(value), cx, metaTop + 23, { width: cellW - 12 });
+  });
+
+  // ── PARTIES ──
+  let y = metaTop + metaH + 20;
+  const colGap = 20;
+  const colW = (W - colGap) / 2;
+  const drawParty = (title, lines, x) => {
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NATIVE_COLORS.light)
+      .text(title.toUpperCase(), x, y, { width: colW, characterSpacing: 1.2 });
+    const ruleY = doc.y + 5;
+    doc.rect(x, ruleY, colW, 1).fill(NATIVE_COLORS.border);
+    let ly = ruleY + 8;
+    lines.filter(Boolean).forEach((line, i) => {
+      doc.font(i === 0 ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(i === 0 ? 10.5 : 9.5)
+        .fillColor(i === 0 ? NATIVE_COLORS.ink : NATIVE_COLORS.body)
+        .text(String(line), x, ly, { width: colW, lineGap: 1 });
+      ly = doc.y + 3;
+    });
+    return ly;
+  };
+  const partiesBottom = Math.max(
+    drawParty('From', [seller.name, seller.address, `Phone: ${seller.phone}`, seller.email], L),
+    drawParty('Bill To', [customer.name, customer.address, `Phone: ${customer.phone}`, customer.email], L + colW + colGap)
+  );
+  y = partiesBottom + 16;
+
+  // ── ITEMS TABLE ──
+  const colSN = L + 8;
+  const colDescX = L + 42;
+  const descW = 246;
+  const colQtyCx = L + 320;
+  const colUnitRight = L + 432;
+  const colAmtRight = R - 8;
+
+  const drawTableHeader = (ty) => {
+    doc.rect(L, ty, W, 24).fill(NATIVE_COLORS.ink);
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(NATIVE_COLORS.white);
+    doc.text('S.N', colSN, ty + 8.5, { characterSpacing: 0.8 });
+    doc.text('DESCRIPTION', colDescX, ty + 8.5, { characterSpacing: 0.8 });
+    doc.text('QTY', colQtyCx - 40, ty + 8.5, { width: 80, align: 'center', characterSpacing: 0.8 });
+    doc.text('UNIT PRICE', colUnitRight - 110, ty + 8.5, { width: 110, align: 'right', characterSpacing: 0.8 });
+    doc.text('AMOUNT', colAmtRight - 110, ty + 8.5, { width: 110, align: 'right', characterSpacing: 0.8 });
+    return ty + 24;
+  };
+
+  y = drawTableHeader(y);
+  const items = (data.items || []).length
+    ? data.items
+    : [{ name: 'No items', quantity: '', unitPrice: 0, amount: 0 }];
+
+  items.forEach((item, i) => {
+    const desc = item.color ? `${item.name} · ${item.color}` : String(item.name);
+    const textH = doc.font('Helvetica-Bold').fontSize(9.5).heightOfString(desc, { width: descW });
+    const rowH = Math.max(22, textH + 13);
+
+    if (y + rowH > NATIVE_PAGE.height - NATIVE_BOTTOM_RESERVE) {
+      doc.addPage();
+      y = drawTableHeader(NATIVE_MARGIN);
+    }
+
+    if (i % 2 === 1) doc.rect(L, y, W, rowH).fill(NATIVE_COLORS.bg);
+
+    doc.font('Helvetica').fontSize(9.5).fillColor(NATIVE_COLORS.muted)
+      .text(String(i + 1), colSN, y + 7, { width: 28 });
+
+    let textY = y + 7;
+    doc.font('Helvetica-Bold').fontSize(9.5).fillColor(NATIVE_COLORS.ink)
+      .text(String(item.name), colDescX, textY, { width: descW, continued: !!item.color });
+    if (item.color) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(NATIVE_COLORS.muted).text(` · ${item.color}`);
+    }
+
+    doc.font('Helvetica').fontSize(9.5).fillColor(NATIVE_COLORS.body)
+      .text(String(item.quantity ?? ''), colQtyCx - 40, textY, { width: 80, align: 'center' });
+    doc.text(formatCurrency(item.unitPrice, data.currency), colUnitRight - 110, textY, { width: 110, align: 'right' });
+    doc.font('Helvetica-Bold').fillColor(NATIVE_COLORS.ink)
+      .text(formatCurrency(item.amount, data.currency), colAmtRight - 110, textY, { width: 110, align: 'right' });
+
+    y += rowH;
+    doc.rect(L, y, W, 1).fill(NATIVE_COLORS.border);
+  });
+
+  // ── TOTALS ──
+  y += 22;
+  if (y > NATIVE_PAGE.height - 180) {
+    doc.addPage();
+    y = NATIVE_MARGIN;
+  }
+  const boxW = 250;
+  const boxX = R - boxW;
+  const totalRows = [['Subtotal', data.subtotal]];
+  if (Number(data.shippingFee) > 0) totalRows.push(['Shipping Fee', data.shippingFee]);
+  if (Number(data.giftBoxCharge) > 0) totalRows.push(['Gift Box Charge', data.giftBoxCharge]);
+
+  totalRows.forEach(([label, value]) => {
+    doc.font('Helvetica').fontSize(9.5).fillColor(NATIVE_COLORS.muted)
+      .text(label, boxX, y, { width: boxW - 120 });
+    doc.fillColor(NATIVE_COLORS.ink)
+      .text(formatCurrency(value, data.currency), boxX, y, { width: boxW, align: 'right' });
+    y += 15;
+  });
+
+  doc.rect(boxX, y, boxW, 1).fill(NATIVE_COLORS.rule);
+  y += 8;
+  doc.rect(boxX, y, boxW, 26).fill(NATIVE_COLORS.ink);
+  doc.font('Helvetica-Bold').fontSize(9.5).fillColor(NATIVE_COLORS.white)
+    .text('TOTAL', boxX + 10, y + 8.5, { characterSpacing: 1 });
+  doc.fontSize(12).text(formatCurrency(data.totalAmount, data.currency), boxX, y + 6, { width: boxW - 10, align: 'right' });
+  y += 26 + 20;
+
+  // ── AMOUNT IN WORDS ──
+  const words = formatAmountInWords(data.totalAmount, data.currency);
+  const wordsH = doc.font('Helvetica').fontSize(9)
+    .heightOfString(words, { width: W - 24 }) + 16;
+  doc.rect(L, y, W, wordsH).fill(NATIVE_COLORS.bg);
+  doc.lineWidth(1).dash(3, { space: 3 }).strokeColor(NATIVE_COLORS.rule).rect(L, y, W, wordsH).stroke();
+  doc.undash();
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(NATIVE_COLORS.ink)
+    .text('Amount in words: ', L + 10, y + 8, { continued: true, width: W - 20 });
+  doc.font('Helvetica').fillColor(NATIVE_COLORS.body).text(words, { width: W - 20 });
+  y += wordsH + 22;
+
+  // ── FOOTER ──
+  if (y > NATIVE_PAGE.height - 110) {
+    doc.addPage();
+    y = NATIVE_MARGIN;
+  }
+  doc.rect(0, y, NATIVE_PAGE.width, 1).fill(NATIVE_COLORS.border);
+  y += 16;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(NATIVE_COLORS.ink)
+    .text(`Thank you for shopping with ${seller.name || 'us'}!`, L, y, { width: W, align: 'center' });
+  doc.font('Helvetica').fontSize(8).fillColor(NATIVE_COLORS.muted)
+    .text(`For any questions regarding this invoice, contact us at ${seller.phone || ''}  |  ${seller.email || ''}`,
+      L, doc.y + 5, { width: W, align: 'center' });
+  doc.text('This is a computer-generated document and does not require a signature.',
+    L, doc.y + 3, { width: W, align: 'center' });
+};
+
+const generateInvoiceNativePdfBuffer = (params) => {
+  const PDFDocument = _loadPdfKit();
+  if (!PDFDocument) return Promise.resolve(null);
+
+  let data;
+  try {
+    data = params?.invoiceNo ? params : extractInvoiceData(params);
+  } catch (err) {
+    console.error('[invoice] native PDF data extraction failed:', err.message);
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const doc = new PDFDocument({
+        size: 'A4',
+        margin: 0,
+        info: {
+          Title: `${data.title || 'Order Invoice'} - ${data.invoiceNo}`,
+          Author: data.seller?.name || 'Abhushan Gallery',
+          Subject: `Invoice #${data.invoiceNo}`,
+        },
+      });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('error', (err) => {
+        console.error('[invoice] native PDF generation failed:', err.message);
+        resolve(null);
+      });
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      _drawNativeInvoice(doc, data);
+      doc.end();
+    } catch (err) {
+      console.error('[invoice] native PDF generation failed:', err.message);
+      resolve(null);
+    }
+  });
+};
+
 module.exports = {
   buildInvoiceHtml,
   buildInvoiceSvg,
   generateInvoicePdfBuffer,
+  generateInvoiceNativePdfBuffer,
   generateInvoiceSvgBuffer,
   generateInvoicePngBuffer,
   extractInvoiceData,
