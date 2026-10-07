@@ -2,6 +2,11 @@
 deployment:
   tasks:
     - node: "npm install"
-    - node: "cd frontend && npm install && npm run build"
+    # `frontend/` only carries the committed, prebuilt dist (the React source
+    # lives in its own repo), so `npm run build` here used to fail on every
+    # deploy — which aborted the pipeline before `restart: true`, leaving the
+    # old Node process running with stale email code. Build only if a
+    # package.json ever shows up; otherwise skip straight to the restart.
+    - node: "if [ -f frontend/package.json ]; then cd frontend && npm install && npm run build; else echo 'frontend: prebuilt dist committed, skipping build'; fi"
     - node: "cd .."
     - restart: true

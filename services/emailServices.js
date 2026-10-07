@@ -10,6 +10,7 @@ const { Product } = require("../modals/product.modal");
 const {
   generateInvoicePdfBuffer,
   generateInvoiceNativePdfBuffer,
+  generateInvoiceBarePdfBuffer,
 } = require('./invoiceRenderer.service');
 
 const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
@@ -17,18 +18,25 @@ const formatCurrency = (value) => `NPR ${Number(value || 0).toFixed(2)}`;
 /**
  * Build the invoice attachment for an order email.
  *
- * Always a PDF, in two flavours:
+ * Always a PDF, in three tiers:
  *   1. Chromium-rendered (puppeteer) — the full A4 layout with pagination.
  *   2. Native (pdfkit) — used when no Chrome binary is available. It draws the
  *      same invoice as real PDF text, so the characters are always correct.
+ *   3. Bare (zero dependencies) — writes the PDF by hand with Node built-ins,
+ *      for hosts where pdfkit is missing from node_modules as well.
  *
  * The old PNG raster fallback is gone on purpose: on hosts without Chromium it
  * produced an image whose glyphs were missing/garbled, and an image is not a
  * document the customer can print or keep. Returns null (send without an
- * attachment) only if both PDF paths fail.
+ * attachment) only if every PDF path fails — each tier logs why it bailed.
  */
 const buildInvoiceAttachment = async ({ order, customerEmail, customerName, senderEmail, title }) => {
-  const orderId = order.productOrderId || order._id.toString().slice(-8).toUpperCase();
+  let orderId = 'ORDER';
+  try {
+    orderId = order?.productOrderId || String(order?._id ?? '').replace(/[^A-Za-z0-9]/g, '').slice(-8).toUpperCase() || 'ORDER';
+  } catch {
+    // a malformed id must never abort the email itself
+  }
   const rendererParams = { order, customerEmail, customerName, senderEmail, title };
 
   try {
@@ -51,6 +59,17 @@ const buildInvoiceAttachment = async ({ order, customerEmail, customerName, send
     }
   } catch (error) {
     console.error(`[invoice] native PDF generation failed for ${orderId}:`, error?.message);
+  }
+
+  try {
+    const pdf = await generateInvoiceBarePdfBuffer(rendererParams);
+    if (pdf) {
+      const buffer = Buffer.from(pdf);
+      console.log(`[invoice] PDF generated (bare fallback): ${buffer.length} bytes`);
+      return { filename: `invoice-${orderId}.pdf`, content: buffer, contentType: 'application/pdf' };
+    }
+  } catch (error) {
+    console.error(`[invoice] bare PDF generation failed for ${orderId}:`, error?.message);
   }
 
   console.error(`[invoice] Could not render a PDF invoice for ${orderId}; sending without an attachment.`);
@@ -610,10 +629,10 @@ const sendOrderConfirmationToCustomer = async (order) => {
               <!-- Summary -->
               <div style="margin-top:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;">
                 <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
-                  <span>Subtotal</span><span style="font-weight:600;color:#374151;">${formatCurrency(subtotal)}</span>
+                  <span><pre>Subtotal: </pre></span> <span style="font-weight:600;color:#374151;">${formatCurrency(subtotal)}</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
-                  <span>Shipping</span><span style="font-weight:600;color:#374151;">${formatCurrency(shippingPrice)}</span>
+                  <span><pre>Shipping: </pre></span><span style="font-weight:600;color:#374151;">${formatCurrency(shippingPrice)}</span>
                 </div>
                 ${giftBoxCharge > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:#6b7280;">
                   <span>Gift Box</span><span style="font-weight:600;color:#374151;">${formatCurrency(giftBoxCharge)}</span>
@@ -721,7 +740,7 @@ const sendOrderPlacedConfirmationToCustomer = async (order) => {
           <tr>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;font-weight:600;">${productName}</td>
-            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${colorName}</td>
+            // <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${colorName}</td>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${quantity}</td>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:right;">${formatCurrency(linePrice)}</td>
           </tr>

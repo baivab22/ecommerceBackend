@@ -105,6 +105,16 @@ app.use('/api/scan', require('./routes/scanRoutes'));
 
 console.log("Backend server running...");
 
+// Show which invoice-PDF tiers are usable on this host, so a deploy that
+// skipped `npm install` (pdfkit missing) or has no Chrome is visible in the
+// boot log rather than as a customer email with no attachment.
+try {
+  const { describeInvoiceRenderers } = require('./services/invoiceRenderer.service');
+  console.log(`[invoice] PDF renderers: ${describeInvoiceRenderers()}`);
+} catch (err) {
+  console.error('[invoice] could not probe PDF renderers:', err.message);
+}
+
 
 
 

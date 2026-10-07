@@ -1285,13 +1285,488 @@ const generateInvoiceNativePdfBuffer = (params) => {
   });
 };
 
+// ─── BARE PDF FALLBACK (no Chromium, no pdfkit, no npm packages) ─────────────
+// Absolute last resort. Two things can go wrong on a production host: there is
+// no Chrome binary for Puppeteer, and node_modules was never refreshed so
+// `require('pdfkit')` throws. The invoice must still leave as a real PDF, so
+// this renderer writes the PDF file format by hand with nothing but Node
+// built-ins: plain content streams in the PDF standard Helvetica fonts, which
+// every reader ships. Text stays selectable and uses the correct characters —
+// never a raster image, never garbled glyphs.
+
+const _bareWidthTable = (spec) => spec.split(/\s+/).filter(Boolean).map(Number);
+
+// Helvetica advance widths (units/1000) for ASCII 32..126 from the base-14
+// AFM metrics — used to wrap, measure and align text without a layout engine.
+const BARE_W_REGULAR = _bareWidthTable(`
+278 278 355 556 556 889 667 191 333 333 389 584 278 333 278 278
+556 556 556 556 556 556 556 556 556 556 278 278 584 584 584 556
+1015 667 667 722 722 667 611 778 722 278 500 667 556 833 722 778
+667 778 722 667 611 722 667 944 667 667 611 278 278 278 469 556
+333 556 556 500 556 556 278 556 556 222 222 500 222 833 556 556
+556 556 333 500 278 556 500 722 500 500 500 334 260 334 584`);
+
+const BARE_W_BOLD = _bareWidthTable(`
+278 333 474 556 556 889 722 238 333 333 389 584 278 333 278 278
+556 556 556 556 556 556 556 556 556 556 333 333 584 584 584 611
+975 722 722 722 722 667 611 778 722 278 556 722 611 833 722 778
+667 778 722 667 611 722 667 944 667 667 611 333 278 333 584 556
+333 556 611 556 611 556 333 611 611 278 278 556 278 889 611 611
+611 611 389 556 333 611 556 778 556 556 500 389 280 389 584`);
+
+const BARE_W_OTHER = new Map([
+  [0x00a0, 278], [0x00b7, 278],
+  [0x2013, 556], [0x2014, 1000], [0x2018, 222], [0x2019, 222],
+  [0x201c, 333], [0x201d, 333], [0x2022, 350], [0x2026, 1000],
+  [0x2122, 1000], [0x20ac, 556],
+]);
+
+// Unicode code points that WinAnsiEncoding keeps at the C1 positions.
+const BARE_WINANSI = new Map([
+  [0x2013, 0x96], [0x2014, 0x97], [0x2018, 0x91], [0x2019, 0x92],
+  [0x201c, 0x93], [0x201d, 0x94], [0x2022, 0x95], [0x2026, 0x85],
+  [0x2122, 0x99], [0x20ac, 0x80],
+]);
+
+const _bareWidthOf = (cp, bold) => {
+  if (cp >= 0x20 && cp <= 0x7e) return (bold ? BARE_W_BOLD : BARE_W_REGULAR)[cp - 0x20];
+  return BARE_W_OTHER.get(cp) || 556; // unknown glyph: average Helvetica advance
+};
+
+// Encode a JS string as a WinAnsi byte string for a PDF literal `(...)`.
+const _bareEncode = (str) => {
+  let out = '';
+  for (const ch of String(str)) {
+    const cp = ch.codePointAt(0);
+    let byte = null;
+    if (cp >= 0x20 && cp <= 0x7e) byte = cp;
+    else if (cp >= 0xa0 && cp <= 0xff) byte = cp;
+    else if (cp === 0x0a || cp === 0x0d) { out += ' '; continue; }
+    else byte = BARE_WINANSI.get(cp) ?? 0x3f; // '?' for glyphs WinAnsi lacks
+    const c = String.fromCharCode(byte);
+    out += (c === '(' || c === ')' || c === '\\') ? `\\${c}` : c;
+  }
+  return out;
+};
+
+const _bareRgb = (color) => {
+  const hex = String(color || '#000000').replace('#', '');
+  const n = parseInt(hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex, 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+    .map((v) => String(Math.round(v * 1000) / 1000))
+    .join(' ');
+};
+
+const _bareNum = (n) => String(Math.round(n * 100) / 100);
+
+// A tiny drawing surface with the pdfkit-shaped API the invoice layout uses.
+const _createBarePdf = () => {
+  const pages = [];
+  let ops = [];
+  const newPage = () => {
+    if (ops.length) pages.push(ops);
+    ops = [];
+  };
+  newPage();
+  const allPages = () => (ops.length ? [...pages, ops] : pages.slice());
+
+  const measure = (str, size, bold, charSpacing = 0) => {
+    const chars = [...String(str)];
+    let units = 0;
+    for (const ch of chars) units += _bareWidthOf(ch.codePointAt(0), bold);
+    return (units / 1000) * size + chars.length * charSpacing;
+  };
+
+  const wrap = (str, maxWidth, size, bold, charSpacing) => {
+    const lines = [];
+    let line = '';
+    for (const word of String(str).split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && measure(candidate, size, bold, charSpacing) > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
+    if (!lines.length) lines.push('');
+    // Hard-break a single word that is wider than the column.
+    return lines.flatMap((l) => {
+      if (measure(l, size, bold, charSpacing) <= maxWidth || !l) return [l];
+      const chunks = [];
+      let chunk = '';
+      for (const ch of l) {
+        if (chunk && measure(chunk + ch, size, bold, charSpacing) > maxWidth) {
+          chunks.push(chunk);
+          chunk = ch;
+        } else {
+          chunk += ch;
+        }
+      }
+      if (chunk) chunks.push(chunk);
+      return chunks;
+    });
+  };
+
+  const lineHeight = (size, lineGap = 0) => size * 1.2 + lineGap;
+
+  // Returns the y coordinate just below the text block (top-left origin).
+  const text = (str, x, yTop, opts = {}) => {
+    const size = opts.size ?? 10;
+    const bold = !!opts.bold;
+    const color = opts.color || NATIVE_COLORS.ink;
+    const width = opts.width;
+    const align = opts.align || 'left';
+    const charSpacing = opts.charSpacing || 0;
+    const lineGap = opts.lineGap || 0;
+    const lh = lineHeight(size, lineGap);
+    const lines = width
+      ? wrap(str, width, size, bold, charSpacing)
+      : String(str).split('\n');
+
+    lines.forEach((line, i) => {
+      if (!line) return;
+      const lineWidth = measure(line, size, bold, charSpacing);
+      let tx = x;
+      if (width && align === 'right') tx = x + width - lineWidth;
+      else if (width && align === 'center') tx = x + (width - lineWidth) / 2;
+      const baseline = NATIVE_PAGE.height - (yTop + i * lh + size * 0.8);
+      ops.push(
+        `q ${_bareRgb(color)} rg BT /${bold ? 'F2' : 'F1'} ${size} Tf ` +
+        `${charSpacing} Tc ${_bareNum(tx)} ${_bareNum(baseline)} Td ` +
+        `(${_bareEncode(line)}) Tj ET Q`
+      );
+    });
+    return yTop + lines.length * lh;
+  };
+
+  const heightOfString = (str, opts = {}) => {
+    const size = opts.size ?? 10;
+    const bold = !!opts.bold;
+    const width = opts.width;
+    const charSpacing = opts.charSpacing || 0;
+    const lines = width
+      ? wrap(str, width, size, bold, charSpacing)
+      : String(str).split('\n');
+    return lines.length * lineHeight(size, opts.lineGap || 0);
+  };
+
+  // Rectangle fill; y is the TOP edge (converted to PDF's bottom-left origin).
+  const rect = (x, yTop, w, h, color) => {
+    ops.push(
+      `${_bareRgb(color)} rg ${_bareNum(x)} ${_bareNum(NATIVE_PAGE.height - yTop - h)} ` +
+      `${_bareNum(w)} ${_bareNum(h)} re f`
+    );
+  };
+
+  const line = (x1, y1, x2, y2, color, dashed = false) => {
+    ops.push(
+      `q ${_bareRgb(color)} RG 1 w ${dashed ? '[3 3] 0 d' : '[] 0 d'} ` +
+      `${_bareNum(x1)} ${_bareNum(NATIVE_PAGE.height - y1)} m ` +
+      `${_bareNum(x2)} ${_bareNum(NATIVE_PAGE.height - y2)} l S Q`
+    );
+  };
+
+  const addPage = () => newPage();
+
+  // Assemble a complete PDF file: catalog, page tree, base-14 fonts, info and
+  // one Flate-compressed content stream per page, with a byte-accurate xref.
+  const render = (meta = {}) => {
+    const zlib = require('zlib');
+    const renderedPages = allPages();
+    if (!renderedPages.length) renderedPages.push([]);
+    const pageObjs = [];
+    const bodies = [null]; // object numbers are 1-based; index 0 unused
+
+    const infoTitle = `${meta.title || 'Order Invoice'} - ${meta.invoiceNo || ''}`;
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const creationDate =
+      `D:${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}` +
+      `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}+00'00'`;
+
+    const nPages = renderedPages.length;
+    const firstPageObj = 6;
+    for (let i = 0; i < nPages; i++) pageObjs.push(firstPageObj + i * 2);
+
+    bodies.push('<< /Type /Catalog /Pages 2 0 R >>'); // 1
+    bodies.push(
+      `<< /Type /Pages /Count ${nPages} /Kids [ ${pageObjs.map((n) => `${n} 0 R`).join(' ')} ] >>`
+    ); // 2
+    bodies.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'); // 3
+    bodies.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'); // 4
+    bodies.push(
+      `<< /Title (${_bareEncode(infoTitle)}) /Author (${_bareEncode(meta.author || 'Abhushan Gallery')})` +
+      ` /Subject (${_bareEncode(meta.subject || '')}) /Producer (Abhushan Gallery invoice renderer)` +
+      ` /CreationDate (${creationDate}) >>`
+    ); // 5
+
+    renderedPages.forEach((pageOps, i) => {
+      const stream = Buffer.from(pageOps.join('\n'), 'latin1');
+      const deflated = zlib.deflateSync(stream, { level: 9 });
+      bodies.push(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${NATIVE_PAGE.width} ${NATIVE_PAGE.height}]` +
+        ` /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${firstPageObj + i * 2 + 1} 0 R >>`
+      );
+      bodies.push(
+        Buffer.concat([
+          Buffer.from(`<< /Length ${deflated.length} /Filter /FlateDecode >>\nstream\n`, 'latin1'),
+          deflated,
+          Buffer.from('\nendstream', 'latin1'),
+        ])
+      );
+    });
+
+    const chunks = [];
+    let offset = 0;
+    const add = (part) => {
+      const buf = Buffer.isBuffer(part) ? part : Buffer.from(part, 'latin1');
+      chunks.push(buf);
+      offset += buf.length;
+    };
+
+    add('%PDF-1.4\n');
+    add('%\xE2\xE3\xCF\xD3\n');
+    const offsets = [0];
+    for (let i = 1; i < bodies.length; i++) {
+      offsets.push(offset);
+      const body = Buffer.isBuffer(bodies[i]) ? bodies[i] : Buffer.from(bodies[i], 'latin1');
+      add(Buffer.concat([Buffer.from(`${i} 0 obj\n`, 'latin1'), body, Buffer.from('\nendobj\n', 'latin1')]));
+    }
+
+    const xrefStart = offset;
+    let xref = `xref\n0 ${bodies.length}\n0000000000 65535 f \n`;
+    for (let i = 1; i < bodies.length; i++) {
+      xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+    }
+    xref +=
+      `trailer\n<< /Size ${bodies.length} /Root 1 0 R /Info 5 0 R >>\n` +
+      `startxref\n${xrefStart}\n%%EOF\n`;
+    add(xref);
+
+    return Buffer.concat(chunks);
+  };
+
+  return { text, rect, line, heightOfString, addPage, render };
+};
+
+// Same layout as the pdfkit renderer, drawn through the bare surface above.
+// The raster logo is deliberately skipped (this path must not depend on image
+// decoding) — the header is set in type instead.
+const _drawBareInvoice = (c, data) => {
+  const L = NATIVE_MARGIN;
+  const R = NATIVE_PAGE.width - NATIVE_MARGIN;
+  const W = R - L;
+  const seller = data.seller || {};
+  const customer = data.customer || {};
+  const C = NATIVE_COLORS;
+
+  // ── HEADER ──
+  const headerTop = 34;
+  const brandW = W * 0.55;
+  let leftY = headerTop;
+  leftY = c.text(String(seller.name || 'Abhushan Gallery'), L, leftY, { size: 16, bold: true, color: C.ink, width: brandW });
+  leftY = c.text(String(seller.address || ''), L, leftY + 2, { size: 8.5, color: C.muted, width: brandW, lineGap: 2 });
+  leftY = c.text(`${seller.phone || ''}  |  ${seller.email || ''}`, L, leftY, { size: 8.5, color: C.muted, width: brandW });
+
+  let rightY = headerTop + 2;
+  rightY = c.text('INVOICE', L, rightY, { size: 21, bold: true, color: C.ink, width: W, align: 'right', charSpacing: 3 });
+  rightY = c.text(String(data.title || 'Order Confirmation'), L, rightY + 5, { size: 9, color: C.muted, width: W, align: 'right' });
+
+  const headerBottom = Math.max(leftY, rightY, headerTop + 58) + 16;
+  c.rect(0, headerBottom, NATIVE_PAGE.width, 3.4, C.ink);
+
+  // ── META BAR ──
+  const metaTop = headerBottom + 3.4;
+  const metaH = 40;
+  c.rect(0, metaTop, NATIVE_PAGE.width, metaH, C.bg);
+  c.rect(0, metaTop + metaH - 1, NATIVE_PAGE.width, 1, C.border);
+
+  const cellW = W / 4;
+  [
+    ['Invoice No.', `#${data.invoiceNo || 'N/A'}`],
+    ['Date', data.date || 'N/A'],
+    ['Payment Method', data.paymentMethod || 'N/A'],
+    ['Order No.', `#${data.orderNo || 'N/A'}`],
+  ].forEach(([label, value], i) => {
+    const cx = L + i * cellW;
+    if (i > 0) c.rect(cx - 7, metaTop + 8, 1, metaH - 16, C.border);
+    c.text(label.toUpperCase(), cx, metaTop + 10, { size: 7, bold: true, color: C.light, width: cellW - 12, charSpacing: 1 });
+    c.text(String(value), cx, metaTop + 23, { size: 9.5, bold: true, color: C.ink, width: cellW - 12 });
+  });
+
+  // ── PARTIES ──
+  const colGap = 20;
+  const colW = (W - colGap) / 2;
+  const partiesTop = metaTop + metaH + 20;
+  const drawParty = (title, lines, x) => {
+    let py = c.text(title.toUpperCase(), x, partiesTop, { size: 7.5, bold: true, color: C.light, width: colW, charSpacing: 1.2 });
+    c.rect(x, py + 5, colW, 1, C.border);
+    let ly = py + 13;
+    lines.filter(Boolean).forEach((entry, i) => {
+      ly = c.text(String(entry), x, ly, {
+        size: i === 0 ? 10.5 : 9.5,
+        bold: i === 0,
+        color: i === 0 ? C.ink : C.body,
+        width: colW,
+        lineGap: 1,
+      }) + 3;
+    });
+    return ly;
+  };
+  let y = Math.max(
+    drawParty('From', [seller.name, seller.address, `Phone: ${seller.phone}`, seller.email], L),
+    drawParty('Bill To', [customer.name, customer.address, `Phone: ${customer.phone}`, customer.email], L + colW + colGap)
+  ) + 16;
+
+  // ── ITEMS TABLE ──
+  const colSN = L + 8;
+  const colDescX = L + 42;
+  const descW = 246;
+  const colQtyCx = L + 320;
+  const colUnitRight = L + 432;
+  const colAmtRight = R - 8;
+
+  const drawTableHeader = (ty) => {
+    c.rect(L, ty, W, 24, C.ink);
+    const head = { size: 8, bold: true, color: C.white, charSpacing: 0.8 };
+    c.text('S.N', colSN, ty + 8.5, head);
+    c.text('DESCRIPTION', colDescX, ty + 8.5, head);
+    c.text('QTY', colQtyCx - 40, ty + 8.5, { ...head, width: 80, align: 'center' });
+    c.text('UNIT PRICE', colUnitRight - 110, ty + 8.5, { ...head, width: 110, align: 'right' });
+    c.text('AMOUNT', colAmtRight - 110, ty + 8.5, { ...head, width: 110, align: 'right' });
+    return ty + 24;
+  };
+
+  y = drawTableHeader(y);
+  const items = (data.items || []).length
+    ? data.items
+    : [{ name: 'No items', quantity: '', unitPrice: 0, amount: 0 }];
+
+  items.forEach((item, i) => {
+    const nameH = c.heightOfString(String(item.name), { width: descW, size: 9.5, bold: true });
+    const colorH = item.color
+      ? c.heightOfString(`· ${item.color}`, { width: descW, size: 8.5 }) + 1
+      : 0;
+    const rowH = Math.max(22, nameH + colorH + 13);
+
+    if (y + rowH > NATIVE_PAGE.height - NATIVE_BOTTOM_RESERVE) {
+      c.addPage();
+      y = drawTableHeader(NATIVE_MARGIN);
+    }
+
+    if (i % 2 === 1) c.rect(L, y, W, rowH, C.bg);
+
+    c.text(String(i + 1), colSN, y + 7, { size: 9.5, color: C.muted, width: 28 });
+
+    const textY = y + 7;
+    let descY = c.text(String(item.name), colDescX, textY, { size: 9.5, bold: true, color: C.ink, width: descW });
+    if (item.color) {
+      c.text(`· ${item.color}`, colDescX, descY + 1, { size: 8.5, color: C.muted, width: descW });
+    }
+
+    c.text(String(item.quantity ?? ''), colQtyCx - 40, textY, { size: 9.5, color: C.body, width: 80, align: 'center' });
+    c.text(formatCurrency(item.unitPrice, data.currency), colUnitRight - 110, textY, { size: 9.5, color: C.body, width: 110, align: 'right' });
+    c.text(formatCurrency(item.amount, data.currency), colAmtRight - 110, textY, { size: 9.5, bold: true, color: C.ink, width: 110, align: 'right' });
+
+    y += rowH;
+    c.rect(L, y, W, 1, C.border);
+  });
+
+  // ── TOTALS ──
+  y += 22;
+  if (y > NATIVE_PAGE.height - 180) {
+    c.addPage();
+    y = NATIVE_MARGIN;
+  }
+  const boxW = 250;
+  const boxX = R - boxW;
+  const totalRows = [['Subtotal', data.subtotal]];
+  if (Number(data.shippingFee) > 0) totalRows.push(['Shipping Fee', data.shippingFee]);
+  if (Number(data.giftBoxCharge) > 0) totalRows.push(['Gift Box Charge', data.giftBoxCharge]);
+
+  totalRows.forEach(([label, value]) => {
+    c.text(label, boxX, y, { size: 9.5, color: C.muted, width: boxW - 120 });
+    c.text(formatCurrency(value, data.currency), boxX, y, { size: 9.5, color: C.ink, width: boxW, align: 'right' });
+    y += 15;
+  });
+
+  c.rect(boxX, y, boxW, 1, C.rule);
+  y += 8;
+  c.rect(boxX, y, boxW, 26, C.ink);
+  c.text('TOTAL', boxX + 10, y + 8.5, { size: 9.5, bold: true, color: C.white, charSpacing: 1 });
+  c.text(formatCurrency(data.totalAmount, data.currency), boxX, y + 6, { size: 12, bold: true, color: C.white, width: boxW - 10, align: 'right' });
+  y += 26 + 20;
+
+  // ── AMOUNT IN WORDS ──
+  const words = formatAmountInWords(data.totalAmount, data.currency);
+  const wordsH = c.heightOfString(words, { width: W - 24, size: 9 }) + 16;
+  c.rect(L, y, W, wordsH, C.bg);
+  c.line(L, y, L + W, y, C.rule, true);
+  c.line(L + W, y, L + W, y + wordsH, C.rule, true);
+  c.line(L + W, y + wordsH, L, y + wordsH, C.rule, true);
+  c.line(L, y + wordsH, L, y, C.rule, true);
+  c.text(`Amount in words: ${words}`, L + 10, y + 8, { size: 9, bold: true, color: C.ink, width: W - 20 });
+  y += wordsH + 22;
+
+  // ── FOOTER ──
+  if (y > NATIVE_PAGE.height - 110) {
+    c.addPage();
+    y = NATIVE_MARGIN;
+  }
+  c.rect(0, y, NATIVE_PAGE.width, 1, C.border);
+  y += 16;
+  y = c.text(`Thank you for shopping with ${seller.name || 'us'}!`, L, y, { size: 10, bold: true, color: C.ink, width: W, align: 'center' });
+  y = c.text(`For any questions regarding this invoice, contact us at ${seller.phone || ''}  |  ${seller.email || ''}`,
+    L, y + 5, { size: 8, color: C.muted, width: W, align: 'center' });
+  c.text('This is a computer-generated document and does not require a signature.',
+    L, y + 3, { size: 8, color: C.muted, width: W, align: 'center' });
+};
+
+const generateInvoiceBarePdfBuffer = (params) => {
+  try {
+    const data = params?.invoiceNo ? params : extractInvoiceData(params);
+    const c = _createBarePdf();
+    _drawBareInvoice(c, data);
+    return Promise.resolve(c.render({
+      title: data.title || 'Order Invoice',
+      invoiceNo: data.invoiceNo,
+      author: data.seller?.name || 'Abhushan Gallery',
+      subject: `Invoice #${data.invoiceNo}`,
+    }));
+  } catch (err) {
+    console.error('[invoice] bare PDF generation failed:', err.message);
+    return Promise.resolve(null);
+  }
+};
+
+// Boot-time health check: which of the three PDF tiers can this host actually
+// use? Logged on startup so a broken production deploy is obvious immediately
+// instead of surfacing as an email with no attachment.
+const describeInvoiceRenderers = () => {
+  let chromium;
+  try {
+    const puppeteer = require('puppeteer');
+    const exe = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : '';
+    chromium = exe && require('fs').existsSync(exe) ? 'available' : 'no Chrome binary';
+  } catch (err) {
+    chromium = `puppeteer not installed (${err.code || err.message})`;
+  }
+
+  const pdfkit = _loadPdfKit() ? 'available' : 'MISSING';
+  return `chromium=${chromium} | pdfkit=${pdfkit} | bare(no-deps)=always`;
+};
+
 module.exports = {
   buildInvoiceHtml,
   buildInvoiceSvg,
   generateInvoicePdfBuffer,
   generateInvoiceNativePdfBuffer,
+  generateInvoiceBarePdfBuffer,
   generateInvoiceSvgBuffer,
   generateInvoicePngBuffer,
   extractInvoiceData,
+  describeInvoiceRenderers,
   formatCurrency,
 };

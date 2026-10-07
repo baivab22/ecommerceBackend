@@ -1,11 +1,13 @@
 /**
- * Verifies both invoice PDF paths (no email, no database needed):
+ * Verifies all three invoice PDF paths (no email, no database needed):
  *
- *   1. Native (pdfkit) renderer — the Chromium-free fallback that guarantees a
- *      PDF attachment even on hosts with no Chrome binary. Its text must be
- *      real, readable PDF text: the required strings are decoded straight out
- *      of the content streams below.
- *   2. Chromium (puppeteer) renderer — the primary path.
+ *   1. Chromium (puppeteer) renderer — the primary path.
+ *   2. Native (pdfkit) renderer — the Chromium-free fallback.
+ *   3. Bare renderer — zero-dependency last resort (no Chrome, no pdfkit),
+ *      the PDF file format written by hand with Node built-ins.
+ *
+ * The native and bare output must be real, readable PDF text: the required
+ * strings are decoded straight out of the Flate content streams below.
  *
  * Run with: npm run verify:invoice-pdf
  */
@@ -15,6 +17,7 @@ const zlib = require('zlib');
 const {
   generateInvoicePdfBuffer,
   generateInvoiceNativePdfBuffer,
+  generateInvoiceBarePdfBuffer,
 } = require('../services/invoiceRenderer.service');
 
 const order = {
@@ -64,11 +67,15 @@ const readText = (buf) => {
 
   return chunks
     .join('\n')
-    .replace(/\[((?:<[0-9a-fA-F]+>|[-\d. ]+)+)\]\s*TJ|\((?:\\.|[^\\()])*\)\s*Tj/g, (whole, array) => {
-      if (!array) return ' ';
-      return [...array.matchAll(/<([0-9a-fA-F]+)>/g)]
+    // hex strings inside a TJ array (pdfkit's style)
+    .replace(/\[((?:<[0-9a-fA-F]+>|[-\d. ]+)+)\]\s*TJ/g, (whole, array) =>
+      [...array.matchAll(/<([0-9a-fA-F]+)>/g)]
         .map((hex) => Buffer.from(hex[1], 'hex').toString('latin1'))
-        .join('');
+        .join(''))
+    // literal strings shown with Tj (the bare renderer's style)
+    .replace(/\((?:\\.|[^\\()])*\)\s*Tj/g, (whole) => {
+      const inner = whole.slice(1, whole.lastIndexOf(')'));
+      return inner.replace(/\\([()\\])/g, '$1');
     });
 };
 
@@ -98,10 +105,25 @@ const REQUIRED_TEXT = [
   }
   console.log(`PASS: native PDF ${native.length} bytes, all required text present`);
 
+  const bare = await generateInvoiceBarePdfBuffer(params);
+  if (!bare || bare.length < 500 || bare.slice(0, 5).toString('latin1') !== '%PDF-') {
+    console.error('FAIL: bare PDF not generated', bare && bare.length);
+    process.exit(1);
+  }
+  fs.writeFileSync(path.join(__dirname, 'output', 'verify-invoice-bare.pdf'), bare);
+
+  const bareText = readText(bare);
+  const bareMissing = REQUIRED_TEXT.filter((needle) => !bareText.includes(needle));
+  if (bareMissing.length) {
+    console.error('FAIL: bare PDF is missing text:', bareMissing);
+    process.exit(1);
+  }
+  console.log(`PASS: bare (zero-dependency) PDF ${bare.length} bytes, all required text present`);
+
   const chromium = await generateInvoicePdfBuffer(params);
   if (chromium && chromium.length) {
     console.log(`PASS: Chromium PDF ${chromium.length} bytes`);
   } else {
-    console.log('NOTE: Chromium PDF unavailable — the native renderer above will be used');
+    console.log('NOTE: Chromium PDF unavailable — the native/bare renderers above will be used');
   }
 })();
