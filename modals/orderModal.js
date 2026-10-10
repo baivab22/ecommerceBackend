@@ -1,5 +1,41 @@
 const mongoose = require("mongoose");
 
+const ORDER_STATUSES = [
+  "pending",
+  "confirmed",
+  "processing",
+  "shipped",
+  "out_for_delivery",
+  "delivered",
+  "cancelled",
+];
+
+const OrderStatusHistorySchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ORDER_STATUSES,
+      required: true,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    note: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: "",
+    },
+    updatedBy: {
+      type: String,
+      enum: ["admin", "system", "user"],
+      default: "admin",
+    },
+  },
+  { _id: false }
+);
+
 const OrderProductSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -107,7 +143,18 @@ giftBoxCharge:Number,
       type: Date,
     },
 
-    deliveryPartner: String
+    deliveryPartner: String,
+
+  status: {
+    type: String,
+    enum: ORDER_STATUSES,
+    default: "pending",
+    index: true,
+  },
+  statusHistory: {
+    type: [OrderStatusHistorySchema],
+    default: () => [{ status: "pending" }],
+  },
  
   // timestamps: true
 });

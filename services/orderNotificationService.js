@@ -245,7 +245,9 @@ const sendOrderDispatchedNotification = async (order) => {
 };
 
 const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = {}) => {
-  const customerEmail = extractSingleEmail(order?.userId?.email);
+  const customerEmail =
+    extractSingleEmail(order?.userId?.email) ||
+    extractSingleEmail(order?.email);
   if (!customerEmail) {
     return {
       sent: false,
@@ -255,11 +257,11 @@ const sendOrderDeliveryStatusChangedNotification = async (order, statusChange = 
   }
 
   const previousStatus = String(statusChange?.previousStatus || '').trim() || 'Unknown';
-  const newStatus = String(statusChange?.newStatus || '').trim() || 'Unknown';
+  const newStatus = String(statusChange?.newStatusLabel || statusChange?.newStatus || '').trim() || 'Unknown';
   const statusTime = statusChange?.statusTime ? new Date(statusChange.statusTime) : new Date();
   const statusTimeLabel = Number.isNaN(statusTime.getTime()) ? new Date().toLocaleString() : statusTime.toLocaleString();
 
-  const customerName = order?.userId?.name || 'Valued Customer';
+  const customerName = order?.name || order?.userId?.name || order?.fullName || 'Valued Customer';
   const orderId = order?.productOrderId || order?._id || 'N/A';
   const currentTotal = formatCurrency(order?.totalAmount);
 

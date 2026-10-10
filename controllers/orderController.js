@@ -21,6 +21,9 @@ const {
 const {
   notifySubscribersOfRestock,
 } = require("../services/restockNotification.service");
+const {
+  sendOrderDeliveryStatusChangedNotification,
+} = require("../services/orderNotificationService");
 
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
@@ -53,6 +56,30 @@ const runAfterResponse = (task) => {
 // bounded-parallel. The cap keeps Mongo and the SMTP connection from being
 // hammered when an admin confirms a large batch at once.
 const CONFIRM_BULK_CONCURRENCY = 5;
+const ORDER_STATUSES = new Set([
+  'pending',
+  'confirmed',
+  'processing',
+  'shipped',
+  'out_for_delivery',
+  'delivered',
+  'cancelled',
+]);
+
+const ORDER_STATUS_LABELS = {
+  pending: 'Pending',
+  confirmed: 'Confirmed',
+  processing: 'Processing',
+  shipped: 'Shipped',
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+};
+
+const normalizeOrderStatus = (value) => {
+  const status = String(value || '').trim().toLowerCase();
+  return ORDER_STATUSES.has(status) ? status : null;
+};
 
 const mapWithConcurrency = async (items, limit, worker) => {
   const results = new Array(items.length);
@@ -150,7 +177,10 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
     };
   }
 
-  const confirmRequested = isTruthy(bodyData?.isConfirmed);
+  const hasExplicitStatus = bodyData?.status !== undefined;
+  const confirmRequested =
+    isTruthy(bodyData?.isConfirmed) &&
+    (!hasExplicitStatus || bodyData.status === 'confirmed');
   const isConfirmingNow = confirmRequested && existing.isConfirmed !== true;
 
   const patchData = { ...bodyData };
@@ -158,10 +188,26 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
   if (isConfirmingNow && !patchData.confirmedAt) {
     patchData.confirmedAt = new Date();
   }
+  if (confirmRequested) {
+    patchData.status = 'confirmed';
+  }
 
-  const updatedOrder = await populateOrderDoc(
-    Orders.findByIdAndUpdate(existing._id, patchData, { new: true })
-  );
+  const updatedOrderDoc = await Orders.findById(existing._id);
+  Object.assign(updatedOrderDoc, patchData);
+  if (patchData.status && patchData.status !== existing.status) {
+    updatedOrderDoc.statusHistory = [
+      ...(updatedOrderDoc.statusHistory || []),
+      { status: patchData.status, updatedAt: new Date() },
+    ];
+  }
+  // Save the document before populating it. `save()` returns a Promise, while
+  // `populateOrderDoc` expects a Mongoose query and cannot populate that
+  // Promise directly.
+  const savedOrder = await updatedOrderDoc.save();
+  const updatedOrder = await Orders.populate(savedOrder, orderPopulateConfig);
+  const statusChanged =
+    patchData.status &&
+    patchData.status !== existing.status;
 
   if (isConfirmingNow && updatedOrder) {
     // Deliberately off the request path, for the same reason as createOrder.
@@ -177,12 +223,32 @@ const confirmOrderAndSync = async (orderIdentifier, bodyData) => {
         console.error('Customer order confirmation email was not sent for order', orderForEmail?._id);
       }
     });
+  } else if (statusChanged && updatedOrder) {
+    const orderForEmail = updatedOrder;
+    runAfterResponse(async () => {
+      const notification = await sendOrderDeliveryStatusChangedNotification(orderForEmail, {
+        previousStatus: ORDER_STATUS_LABELS[existing.status] || 'Pending',
+        newStatus: orderForEmail.status,
+        newStatusLabel: ORDER_STATUS_LABELS[orderForEmail.status] || orderForEmail.status,
+        statusTime: orderForEmail.statusHistory?.length
+          ? orderForEmail.statusHistory[orderForEmail.statusHistory.length - 1].updatedAt
+          : undefined,
+      });
+      if (!notification?.sent && !notification?.skipped) {
+        console.error(
+          '[order] status update email was not sent for order',
+          orderForEmail?._id,
+          notification?.reason || 'Unknown error'
+        );
+      }
+    });
   }
 
   return {
     found: true,
     updatedOrder,
     isConfirmingNow,
+    statusChanged: Boolean(statusChanged),
   };
 };
 
@@ -596,7 +662,39 @@ exports.updateOrderedProduct = async (req, res) => {
     if (!existingOrder) {
       return res.status(404).json({ message: 'Order not found' });
     }
-    const { updatedOrder } = await confirmOrderAndSync(req.params.orderId, req.body);
+    const requestedStatus = req.body?.status === undefined
+      ? undefined
+      : normalizeOrderStatus(req.body.status);
+    if (req.body?.status !== undefined && !requestedStatus) {
+      return res.status(400).json({
+        message: 'Invalid order status',
+        allowedStatuses: [...ORDER_STATUSES],
+      });
+    }
+
+    const updateBody = { ...req.body };
+    const statusNote = String(req.body?.statusNote || '').trim().slice(0, 500);
+    delete updateBody.statusNote;
+    if (requestedStatus) {
+      updateBody.status = requestedStatus;
+      updateBody.isConfirmed = requestedStatus !== 'pending' && requestedStatus !== 'cancelled';
+      if (updateBody.isConfirmed && !updateBody.confirmedAt) {
+        updateBody.confirmedAt = new Date();
+      }
+    }
+    const { updatedOrder } = await confirmOrderAndSync(req.params.orderId, updateBody);
+
+    if (requestedStatus && statusNote) {
+      await Orders.updateOne(
+        { _id: updatedOrder._id, 'statusHistory.status': requestedStatus, 'statusHistory.updatedAt': { $gte: new Date(Date.now() - 5000) } },
+        { $set: { 'statusHistory.$.note': statusNote, 'statusHistory.$.updatedBy': 'admin' } }
+      );
+      updatedOrder.statusHistory = (updatedOrder.statusHistory || []).map((entry) =>
+        entry.status === requestedStatus && !entry.note
+          ? { ...(entry.toObject?.() || entry), note: statusNote, updatedBy: 'admin' }
+          : entry
+      );
+    }
 
     res
       .status(201)

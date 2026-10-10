@@ -16,6 +16,12 @@ const {
 const {
   handlePaymentScreenshotUpload,
 } = require("../handlers/multerPaymentScreenshot.handler");
+const {
+  listOrderChatMessages,
+  createOrderChatMessage,
+  getOrderChatSummary,
+} = require("../controllers/orderChat.controller");
+const { authenticate, requireAdmin } = require("../auth");
 
 const router = express.Router();
 
@@ -33,8 +39,11 @@ router.post("/order/new/:userId", handlePaymentScreenshotUpload, createOrder);
 router.get("/order", getOrderedProductList);
 router.get('/order/user/:userId', getOrdersByUser);
 router.get("/order/orderDetails/:productOrderId", getOrderDetails);
+router.get("/order/:orderId/chat", listOrderChatMessages);
+router.post("/order/:orderId/chat", createOrderChatMessage);
+router.get("/order/:orderId/chat/summary", getOrderChatSummary);
 router.post('/order/confirm-bulk', confirmOrdersBulk);
-router.patch("/order/:orderId", updateOrderedProduct);
+router.patch("/order/:orderId", authenticate, requireAdmin, updateOrderedProduct);
 router.delete("/order/:orderId", deleteSpecificCartOrder);
 
 module.exports = router;
