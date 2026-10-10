@@ -20,6 +20,7 @@ const {
   listOrderChatMessages,
   createOrderChatMessage,
   getOrderChatSummary,
+  getUserOrderChatSummary,
 } = require("../controllers/orderChat.controller");
 const { authenticate, requireAdmin } = require("../auth");
 
@@ -38,6 +39,7 @@ router.post("/order/increase-stock-all", increaseStockForAllProducts);
 router.post("/order/new/:userId", handlePaymentScreenshotUpload, createOrder);
 router.get("/order", getOrderedProductList);
 router.get('/order/user/:userId', getOrdersByUser);
+router.get("/order/user/:userId/chat-summary", getUserOrderChatSummary);
 router.get("/order/orderDetails/:productOrderId", getOrderDetails);
 router.get("/order/:orderId/chat", listOrderChatMessages);
 router.post("/order/:orderId/chat", createOrderChatMessage);

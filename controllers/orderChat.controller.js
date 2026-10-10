@@ -150,3 +150,48 @@ exports.getOrderChatSummary = async (req, res) => {
     return res.status(500).json({ error: "Failed to fetch order chat summary" });
   }
 };
+
+exports.getUserOrderChatSummary = async (req, res) => {
+  try {
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) {
+      return res.status(400).json({ error: "User id is required" });
+    }
+
+    const orders = await Orders.find({ userId })
+      .sort({ createdAt: -1 })
+      .select("_id productOrderId products status isConfirmed OrderedAt date")
+      .lean();
+
+    if (!orders.length) {
+      return res.json({ unreadCount: 0, order: null });
+    }
+
+    const unreadByOrder = await OrderChatMessage.aggregate([
+      {
+        $match: {
+          orderId: { $in: orders.map((order) => order._id) },
+          senderRole: "admin",
+          readByUser: false,
+        },
+      },
+      {
+        $group: {
+          _id: "$orderId",
+          count: { $sum: 1 },
+          latestAt: { $max: "$createdAt" },
+        },
+      },
+      { $sort: { latestAt: -1 } },
+    ]);
+
+    const unreadCount = unreadByOrder.reduce((total, item) => total + item.count, 0);
+    const latestUnreadOrderId = unreadByOrder[0]?._id?.toString();
+    const order = orders.find((item) => item._id.toString() === latestUnreadOrderId) || null;
+
+    return res.json({ unreadCount, order });
+  } catch (error) {
+    console.error("[order-chat] user summary failed:", error?.message || error);
+    return res.status(500).json({ error: "Failed to fetch order chat notifications" });
+  }
+};
