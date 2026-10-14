@@ -95,38 +95,56 @@ const REQUIRED_TEXT = [
   'NPR Four Thousand Five Hundred Only',
 ];
 
-(async () => {
-  const native = await generateInvoiceNativePdfBuffer(params);
-  if (!native || native.length < 500) {
-    console.error('FAIL: native PDF not generated', native && native.length);
-    process.exit(1);
-  }
-  fs.writeFileSync(path.join(__dirname, 'output', 'verify-invoice-native.pdf'), native);
+// Payment display cases: a partial settlement prints the advance paid plus the
+// balance still due, while a fully settled order prints the amount paid with
+// nothing due.
+const scenarios = [
+  {
+    name: 'partial',
+    params: { ...params, order: { ...order, paymentMode: 'partial' } },
+    required: [...REQUIRED_TEXT, 'Amount Paid', 'Balance Due', 'NPR 4,350.00'],
+  },
+  {
+    name: 'full',
+    params: { ...params, order: { ...order, paymentMode: 'full' } },
+    required: [...REQUIRED_TEXT, 'Amount Paid', 'Balance Due', 'NPR 0.00'],
+  },
+];
 
-  const text = readText(native);
-  const missing = REQUIRED_TEXT.filter((needle) => !text.includes(needle));
+const assertText = (label, buf, required) => {
+  const text = readText(buf);
+  const missing = required.filter((needle) => !text.includes(needle));
   if (missing.length) {
-    console.error('FAIL: native PDF is missing text:', missing);
+    console.error(`FAIL: ${label} is missing text:`, missing);
     process.exit(1);
   }
-  console.log(`PASS: native PDF ${native.length} bytes, all required text present`);
+};
 
-  const bare = await generateInvoiceBarePdfBuffer(params);
-  if (!bare || bare.length < 500 || bare.slice(0, 5).toString('latin1') !== '%PDF-') {
-    console.error('FAIL: bare PDF not generated', bare && bare.length);
-    process.exit(1);
+(async () => {
+  for (const scenario of scenarios) {
+    const native = await generateInvoiceNativePdfBuffer(scenario.params);
+    if (!native || native.length < 500) {
+      console.error(`FAIL: native PDF not generated (${scenario.name})`, native && native.length);
+      process.exit(1);
+    }
+    fs.writeFileSync(path.join(__dirname, 'output', `verify-invoice-native-${scenario.name}.pdf`), native);
+    assertText(`native PDF (${scenario.name})`, native, scenario.required);
+    console.log(`PASS: native PDF (${scenario.name}) ${native.length} bytes, all required text present`);
+
+    const bare = await generateInvoiceBarePdfBuffer(scenario.params);
+    if (!bare || bare.length < 500 || bare.slice(0, 5).toString('latin1') !== '%PDF-') {
+      console.error(`FAIL: bare PDF not generated (${scenario.name})`, bare && bare.length);
+      process.exit(1);
+    }
+    fs.writeFileSync(path.join(__dirname, 'output', `verify-invoice-bare-${scenario.name}.pdf`), bare);
+    assertText(`bare PDF (${scenario.name})`, bare, scenario.required);
+    console.log(`PASS: bare (zero-dependency) PDF (${scenario.name}) ${bare.length} bytes, all required text present`);
   }
-  fs.writeFileSync(path.join(__dirname, 'output', 'verify-invoice-bare.pdf'), bare);
 
-  const bareText = readText(bare);
-  const bareMissing = REQUIRED_TEXT.filter((needle) => !bareText.includes(needle));
-  if (bareMissing.length) {
-    console.error('FAIL: bare PDF is missing text:', bareMissing);
-    process.exit(1);
-  }
-  console.log(`PASS: bare (zero-dependency) PDF ${bare.length} bytes, all required text present`);
-
-  const chromium = await generateInvoicePdfBuffer(params);
+  const chromium = await generateInvoicePdfBuffer({
+    ...params,
+    order: { ...order, paymentMode: 'partial' },
+  });
   if (chromium && chromium.length) {
     console.log(`PASS: Chromium PDF ${chromium.length} bytes`);
   } else {

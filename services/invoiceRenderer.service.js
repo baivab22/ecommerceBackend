@@ -146,6 +146,34 @@ const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, t
   const giftBoxCharge = Number(order?.includeGiftBox ? 400 : order?.giftBoxCharge || 0);
   const totalAmount = Number(order?.totalAmount || subtotal + shippingFee + giftBoxCharge);
 
+  // Payment breakdown, mirroring the dashboard print PDF.
+  //
+  //   'partial' → the customer settled the shipping charge up front and pays
+  //               the balance on delivery, so the invoice prints both the paid
+  //               amount and the amount still due.
+  //   'full'    → the whole total was settled up front, so nothing is due.
+  //
+  // Confirmed Phone Pay orders placed before `paymentMode` existed were always
+  // paid in full, and older confirmed outside-valley orders settled just the
+  // shipping charge. Those keep the same two layouts so the invoice and the
+  // dashboard PDF never disagree. Everything else (e.g. Cash on Delivery) shows
+  // only the total.
+  const isPhonePayOrder = String(order?.paymentMethod || '').toLowerCase() === 'phonepay';
+  const paymentMode = String(order?.paymentMode || '').trim().toLowerCase();
+  const isPartialMode = paymentMode === 'partial';
+  const isFullMode = paymentMode === 'full';
+  const isLegacyPartial =
+    !isPartialMode && !isFullMode && order?.isConfirmed === true &&
+    order?.isInsideValley === false && !isPhonePayOrder;
+
+  let payment = null;
+  if (isPartialMode || isLegacyPartial) {
+    const paidAmount = Math.min(shippingFee, totalAmount);
+    payment = { mode: 'partial', paidAmount, dueAmount: Math.max(totalAmount - paidAmount, 0) };
+  } else if (isFullMode || (order?.isConfirmed === true && isPhonePayOrder)) {
+    payment = { mode: 'full', paidAmount: totalAmount, dueAmount: 0 };
+  }
+
   return {
     invoiceNo: orderId,
     orderNo: orderId,
@@ -174,6 +202,7 @@ const extractInvoiceData = ({ order, customerEmail, customerName, senderEmail, t
     subtotal,
     totalAmount,
     totalItems: products.reduce((s, i) => s + i.quantity, 0),
+    payment,
   };
 };
 
@@ -211,6 +240,21 @@ const buildInvoiceHtml = (params) => {
       <span class="t-label">${r.label}</span>
       <span class="t-value">${r.value}</span>
     </div>`).join('');
+
+  // Payment breakdown: partial settlements print the advance that was paid and
+  // the balance still due; full settlements print the amount paid and nothing
+  // due. Orders without an up-front payment (e.g. Cash on Delivery) omit it.
+  const paymentHtml = data.payment ? `
+          <div class="pay-block">
+            <div class="pay-row">
+              <span class="pay-label">Amount Paid</span>
+              <span class="pay-value">${formatCurrency(data.payment.paidAmount, data.currency)}</span>
+            </div>
+            <div class="pay-row pay-due">
+              <span class="pay-label">Balance Due</span>
+              <span class="pay-value">${formatCurrency(data.payment.dueAmount, data.currency)}</span>
+            </div>
+          </div>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -422,6 +466,25 @@ const buildInvoiceHtml = (params) => {
       font-weight:800;
       font-variant-numeric:tabular-nums;
     }
+    .pay-block{
+      margin-top:2.4mm;
+      border:1px solid #D1D5DB;
+      border-radius:1.5mm;
+      background:#F9FAFB;
+      padding:0 4mm;
+    }
+    .pay-row{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:2mm 0;
+      font-size:9.5pt;
+    }
+    .pay-row + .pay-row{ border-top:1px solid #E5E7EB; }
+    .pay-label{ color:#6B7280; }
+    .pay-value{ color:#111827; font-weight:600; font-variant-numeric:tabular-nums; }
+    .pay-row.pay-due .pay-label{ color:#111827; font-weight:700; }
+    .pay-row.pay-due .pay-value{ font-size:11pt; font-weight:800; }
 
     /* ── WORDS ── */
     .notes{ padding:0 15mm 6mm; page-break-inside:avoid; }
@@ -555,6 +618,7 @@ const buildInvoiceHtml = (params) => {
             <span class="g-label">Total</span>
             <span class="g-value">${formatCurrency(data.totalAmount, data.currency)}</span>
           </div>
+          ${paymentHtml}
         </div>
       </div>
 
@@ -926,8 +990,20 @@ const buildInvoiceSvgMarkup = (data) => {
   p.push(T(W - M - 320, ty + 25, 13, '#ffffff', 'TOTAL', ' font-weight="bold" letter-spacing="1"'));
   p.push(T(colAmt, ty + 26, 16, '#ffffff', escapeHtml(formatCurrency(data.totalAmount, data.currency)), ' text-anchor="end" font-weight="bold"'));
 
+  // ── Payment breakdown (partial → paid + due; full → paid, nothing due) ──
+  let totalsBottom = ty + grandH;
+  if (data.payment) {
+    totalsBottom += 30;
+    p.push(T(W - M - 160, totalsBottom, 13, '#6b7280', 'AMOUNT PAID', ' text-anchor="end"'));
+    p.push(T(colAmt, totalsBottom, 13, '#111827', escapeHtml(formatCurrency(data.payment.paidAmount, data.currency)), ' text-anchor="end" font-weight="bold"'));
+    totalsBottom += 24;
+    p.push(T(W - M - 160, totalsBottom, 13, '#111827', 'BALANCE DUE', ' text-anchor="end" font-weight="bold"'));
+    p.push(T(colAmt, totalsBottom, 15, '#111827', escapeHtml(formatCurrency(data.payment.dueAmount, data.currency)), ' text-anchor="end" font-weight="bold"'));
+    totalsBottom += 6;
+  }
+
   // ── Amount in words (wrapped) ──
-  let wy = ty + grandH + 40;
+  let wy = totalsBottom + 40;
   p.push(T(M, wy, 10, '#9ca3af', 'AMOUNT IN WORDS', ' letter-spacing="1"'));
   wy += 19;
   wrapLines(formatAmountInWords(data.totalAmount, data.currency), 95).forEach((ln) => {
@@ -1216,7 +1292,26 @@ const _drawNativeInvoice = (doc, data) => {
   doc.font('Helvetica-Bold').fontSize(9.5).fillColor(NATIVE_COLORS.white)
     .text('TOTAL', boxX + 10, y + 8.5, { characterSpacing: 1 });
   doc.fontSize(12).text(formatCurrency(data.totalAmount, data.currency), boxX, y + 6, { width: boxW - 10, align: 'right' });
-  y += 26 + 20;
+  y += 26;
+
+  // ── PAYMENT BREAKDOWN (partial → paid + due; full → paid, nothing due) ──
+  if (data.payment) {
+    y += 12;
+    const payRows = [
+      ['Amount Paid', data.payment.paidAmount, false],
+      ['Balance Due', data.payment.dueAmount, true],
+    ];
+    payRows.forEach(([label, value, strong]) => {
+      doc.font(strong ? 'Helvetica-Bold' : 'Helvetica').fontSize(strong ? 10 : 9.5)
+        .fillColor(strong ? NATIVE_COLORS.ink : NATIVE_COLORS.muted)
+        .text(String(label), boxX, y, { width: boxW - 120 });
+      doc.font(strong ? 'Helvetica-Bold' : 'Helvetica').fontSize(strong ? 10.5 : 9.5)
+        .fillColor(NATIVE_COLORS.ink)
+        .text(formatCurrency(value, data.currency), boxX, y, { width: boxW, align: 'right' });
+      y += 15;
+    });
+  }
+  y += 20;
 
   // ── AMOUNT IN WORDS ──
   const words = formatAmountInWords(data.totalAmount, data.currency);
@@ -1883,7 +1978,22 @@ const _drawBareInvoice = (c, data) => {
   c.rect(boxX, y, boxW, 26, C.ink);
   c.text('TOTAL', boxX + 10, y + 8.5, { size: 9.5, bold: true, color: C.white, charSpacing: 1 });
   c.text(formatCurrency(data.totalAmount, data.currency), boxX, y + 6, { size: 12, bold: true, color: C.white, width: boxW - 10, align: 'right' });
-  y += 26 + 20;
+  y += 26;
+
+  // ── PAYMENT BREAKDOWN (partial → paid + due; full → paid, nothing due) ──
+  if (data.payment) {
+    y += 12;
+    const payRows = [
+      ['Amount Paid', data.payment.paidAmount, false],
+      ['Balance Due', data.payment.dueAmount, true],
+    ];
+    payRows.forEach(([label, value, strong]) => {
+      c.text(String(label), boxX, y, { size: strong ? 10 : 9.5, bold: strong, color: strong ? C.ink : C.muted, width: boxW - 120 });
+      c.text(formatCurrency(value, data.currency), boxX, y, { size: strong ? 10.5 : 9.5, bold: strong, color: C.ink, width: boxW, align: 'right' });
+      y += 15;
+    });
+  }
+  y += 20;
 
   // ── AMOUNT IN WORDS ──
   const words = formatAmountInWords(data.totalAmount, data.currency);
