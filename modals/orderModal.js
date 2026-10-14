@@ -125,6 +125,15 @@ giftBoxCharge:Number,
   },
   paymentChannel: String,
 
+  // How much of the order the customer settled up front. Only meaningful for
+  // outside-valley Phone Pay orders: 'partial' = shipping charge now, balance
+  // on delivery; 'full' = complete amount paid. Absent for every other flow.
+  paymentMode: {
+    type: String,
+    enum: ["partial", "full"],
+    required: false,
+  },
+
   orderNote:String,
 
     isScanned: {

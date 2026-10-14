@@ -28,6 +28,7 @@ const {
 const isTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
 const PHONE_PAY = 'phonePay';
+const CASH_ON_DELIVERY = 'cashOnDelivery';
 const ORDER_PAYLOAD_FIELD = 'orderData';
 
 // Runs after the HTTP response has already been sent.
@@ -368,6 +369,33 @@ exports.createOrder = async (req, res) => {
     );
   }
 
+  // Cash on Delivery is an inside-the-valley-only option. The checkout UI
+  // hides it for "Outside Kathmandu Valley", but the API enforces the same
+  // rule so a stale tab (or a hand-crafted request) can't slip it through.
+  // The client sends isInsideValley as JSON.stringify(...), so it may arrive
+  // as the string "true"/"false" rather than a boolean.
+  const isInsideValleyOrder = isTruthy(orderBody.isInsideValley);
+  if (orderBody.paymentMethod === CASH_ON_DELIVERY && !isInsideValleyOrder) {
+    return rejectOrder(
+      400,
+      'Cash on Delivery is not available for deliveries outside Kathmandu Valley. Please choose Phone Pay.'
+    );
+  }
+
+  // Outside-the-valley Phone Pay orders can be settled partially (shipping
+  // charge now, balance on delivery) or in full. No other flow may carry the
+  // flag, so a stale tab cannot mislabel an order.
+  const normalizedPaymentMode = String(orderBody.paymentMode || '').trim().toLowerCase();
+  if (normalizedPaymentMode && normalizedPaymentMode !== 'partial' && normalizedPaymentMode !== 'full') {
+    return rejectOrder(400, 'Invalid payment mode. It must be "partial" or "full".');
+  }
+  if (normalizedPaymentMode === 'partial' && !(isPhonePayOrder && !isInsideValleyOrder)) {
+    return rejectOrder(
+      400,
+      'Partial payment is only available for Phone Pay orders delivered outside Kathmandu Valley.'
+    );
+  }
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -461,6 +489,7 @@ exports.createOrder = async (req, res) => {
       paymentScreenshot,
       paymentScreenshotUploadedAt: paymentScreenshot ? new Date() : null,
       paymentChannel: orderBody.paymentChannel || undefined,
+      paymentMode: normalizedPaymentMode || undefined,
       orderNote: orderBody.orderNote,
       deliveryPartner: orderBody.deliveryPartner,
     });
